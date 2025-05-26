@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   Box, 
   Container, 
@@ -20,7 +20,8 @@ import {
   DialogTitle,
   DialogContent,
   DialogActions,
-  InputAdornment
+  InputAdornment,
+  Chip
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import HistoryIcon from '@mui/icons-material/History';
@@ -29,22 +30,71 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import EditIcon from '@mui/icons-material/Edit';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import SettingsIcon from '@mui/icons-material/Settings';
+import Settings from './components/Settings';
+import { sendMessage } from './services/aiService';
 
 const App = () => {
   const [message, setMessage] = useState('');
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('gpt-3.5-turbo');
+  const [selectedModels, setSelectedModels] = useState([]);
   const [showHistory, setShowHistory] = useState(true);
   const [editingConversation, setEditingConversation] = useState(null);
   const [editTitle, setEditTitle] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [models, setModels] = useState([]);
 
-  const models = [
-    { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' },
-    { id: 'gpt-4', name: 'GPT-4' },
-    { id: 'claude-2', name: 'Claude 2' }
-  ];
+  // 从localStorage加载模型列表
+  useEffect(() => {
+    const loadModels = () => {
+      const savedModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
+      if (savedModels.length > 0) {
+        setModels(savedModels);
+        // 如果当前没有选中的模型，选择第一个
+        if (selectedModels.length === 0 && savedModels.length > 0) {
+          setSelectedModels([savedModels[0].id]);
+        }
+      } else {
+        // 如果没有保存的模型，设置默认模型
+        const defaultModels = [
+          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', apiKey: '' },
+          { id: 'gpt-4', name: 'GPT-4', apiKey: '' },
+          { id: 'claude-2', name: 'Claude 2', apiKey: '' }
+        ];
+        setModels(defaultModels);
+        setSelectedModels(['gpt-3.5-turbo']);
+      }
+    };
+
+    // 初始加载
+    loadModels();
+
+    // 监听localStorage变化
+    const handleStorageChange = (e) => {
+      if (e.key === 'aiModels') {
+        loadModels();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // 当模型列表变化时，确保选中的模型仍然有效
+  useEffect(() => {
+    if (models.length > 0) {
+      const validSelectedModels = selectedModels.filter(modelId => 
+        models.find(model => model.id === modelId)
+      );
+      if (validSelectedModels.length === 0) {
+        setSelectedModels([models[0].id]);
+      } else if (validSelectedModels.length !== selectedModels.length) {
+        setSelectedModels(validSelectedModels);
+      }
+    }
+  }, [models, selectedModels]);
 
   // 使用 useMemo 优化搜索性能
   const filteredConversations = useMemo(() => {
@@ -61,7 +111,7 @@ const App = () => {
       id: Date.now(),
       title: 'New Conversation',
       messages: [],
-      model: selectedModel,
+      models: selectedModels,
       createdAt: new Date().toISOString()
     };
     setConversations([newConversation, ...conversations]);
@@ -92,7 +142,8 @@ const App = () => {
           return {
             ...conv,
             title,
-            messages: updatedMessages
+            messages: updatedMessages,
+            models: selectedModels
           };
         }
         return conv;
@@ -101,25 +152,39 @@ const App = () => {
 
     setMessage('');
 
-    // TODO: Implement actual API call here
-    const response = {
-      role: 'assistant',
-      content: 'This is a placeholder response. Implement actual API integration here.',
-      timestamp: new Date().toISOString()
-    };
+    try {
+      // 获取当前对话的所有消息
+      const currentConversation = getCurrentConversation();
+      const messages = currentConversation.messages;
 
-    // 添加AI响应
-    setConversations(prevConversations => {
-      return prevConversations.map(conv => {
-        if (conv.id === currentConversationId) {
-          return {
-            ...conv,
-            messages: [...conv.messages, response]
-          };
-        }
-        return conv;
+      // 调用AI服务 - 这里需要修改为支持多模型
+      const responses = await Promise.all(
+        selectedModels.map(modelId => sendMessage(modelId, messages))
+      );
+
+      // 添加AI响应
+      const aiMessages = responses.map((response, index) => ({
+        role: 'assistant',
+        content: response,
+        model: selectedModels[index],
+        timestamp: new Date().toISOString()
+      }));
+
+      setConversations(prevConversations => {
+        return prevConversations.map(conv => {
+          if (conv.id === currentConversationId) {
+            return {
+              ...conv,
+              messages: [...conv.messages, ...aiMessages]
+            };
+          }
+          return conv;
+        });
       });
-    });
+    } catch (error) {
+      console.error('Error sending message:', error);
+      // 可以在这里添加错误处理UI提示
+    }
   };
 
   const deleteConversation = (conversationId) => {
@@ -156,172 +221,205 @@ const App = () => {
 
   return (
     <Container maxWidth="lg" sx={{ height: '100vh', py: 2 }}>
-      <Box sx={{ display: 'flex', height: '100%', gap: 2 }}>
-        {/* Sidebar */}
-        <Paper sx={{ width: 250, p: 2, display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Button
-              variant="outlined"
-              startIcon={<HistoryIcon />}
-              onClick={() => setShowHistory(!showHistory)}
-            >
-              {showHistory ? 'Hide History' : 'Show History'}
-            </Button>
-            <Tooltip title="New Conversation">
-              <IconButton onClick={createNewConversation} color="primary">
-                <AddIcon />
-              </IconButton>
-            </Tooltip>
-          </Box>
+      {showSettings ? (
+        <Settings onClose={() => setShowSettings(false)} />
+      ) : (
+        <Box sx={{ display: 'flex', height: '100%', gap: 2 }}>
+          {/* Sidebar */}
+          <Paper sx={{ width: 250, p: 2, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+              <Button
+                variant="outlined"
+                startIcon={<HistoryIcon />}
+                onClick={() => setShowHistory(!showHistory)}
+              >
+                {showHistory ? 'Hide History' : 'Show History'}
+              </Button>
+              <Tooltip title="New Conversation">
+                <IconButton onClick={createNewConversation} color="primary">
+                  <AddIcon />
+                </IconButton>
+              </Tooltip>
+            </Box>
 
-          <FormControl fullWidth sx={{ mb: 2 }}>
-            <InputLabel>Model</InputLabel>
-            <Select
-              value={selectedModel}
-              label="Model"
-              onChange={(e) => setSelectedModel(e.target.value)}
-            >
-              {models.map((model) => (
-                <MenuItem key={model.id} value={model.id}>
-                  {model.name}
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
-
-          {showHistory && (
-            <>
-              <TextField
-                fullWidth
-                size="small"
-                placeholder="Search conversations..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                sx={{ mb: 2 }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon fontSize="small" />
-                    </InputAdornment>
-                  ),
-                  endAdornment: searchQuery && (
-                    <InputAdornment position="end">
-                      <IconButton
+            <FormControl fullWidth sx={{ mb: 2 }}>
+              <InputLabel>Models</InputLabel>
+              <Select
+                multiple
+                value={selectedModels}
+                label="Models"
+                onChange={(e) => setSelectedModels(e.target.value)}
+                renderValue={(selected) => (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {selected.map((value) => (
+                      <Chip 
+                        key={value} 
+                        label={models.find(m => m.id === value)?.name || value}
                         size="small"
-                        onClick={() => setSearchQuery('')}
+                      />
+                    ))}
+                  </Box>
+                )}
+              >
+                {models.map((model) => (
+                  <MenuItem key={model.id} value={model.id}>
+                    {model.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            {showHistory && (
+              <>
+                <TextField
+                  fullWidth
+                  size="small"
+                  placeholder="Search conversations..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  sx={{ mb: 2 }}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" />
+                      </InputAdornment>
+                    ),
+                    endAdornment: searchQuery && (
+                      <InputAdornment position="end">
+                        <IconButton
+                          size="small"
+                          onClick={() => setSearchQuery('')}
+                        >
+                          <ClearIcon fontSize="small" />
+                        </IconButton>
+                      </InputAdornment>
+                    )
+                  }}
+                />
+                <List sx={{ overflow: 'auto', flex: 1 }}>
+                  {filteredConversations.map((conv) => (
+                    <React.Fragment key={conv.id}>
+                      <ListItem
+                        button
+                        selected={currentConversationId === conv.id}
+                        onClick={() => setCurrentConversationId(conv.id)}
+                        secondaryAction={
+                          <Box>
+                            <Tooltip title="Edit Title">
+                              <IconButton
+                                edge="end"
+                                aria-label="edit"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditTitle(conv);
+                                }}
+                                size="small"
+                              >
+                                <EditIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Delete Conversation">
+                              <IconButton 
+                                edge="end" 
+                                aria-label="delete"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteConversation(conv.id);
+                                }}
+                                size="small"
+                              >
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        }
                       >
-                        <ClearIcon fontSize="small" />
-                      </IconButton>
-                    </InputAdornment>
-                  )
-                }}
-              />
-              <List sx={{ overflow: 'auto' }}>
-                {filteredConversations.map((conv) => (
-                  <React.Fragment key={conv.id}>
-                    <ListItem
-                      button
-                      selected={currentConversationId === conv.id}
-                      onClick={() => setCurrentConversationId(conv.id)}
-                      secondaryAction={
-                        <Box>
-                          <Tooltip title="Edit Title">
-                            <IconButton
-                              edge="end"
-                              aria-label="edit"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleEditTitle(conv);
-                              }}
-                              size="small"
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Delete Conversation">
-                            <IconButton 
-                              edge="end" 
-                              aria-label="delete"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteConversation(conv.id);
-                              }}
-                              size="small"
-                            >
-                              <DeleteIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        </Box>
-                      }
-                    >
+                        <ListItemText
+                          primary={conv.title}
+                          secondary={new Date(conv.createdAt).toLocaleDateString()}
+                        />
+                      </ListItem>
+                      <Divider />
+                    </React.Fragment>
+                  ))}
+                  {filteredConversations.length === 0 && (
+                    <ListItem>
                       <ListItemText
-                        primary={conv.title}
-                        secondary={new Date(conv.createdAt).toLocaleDateString()}
+                        primary="No conversations found"
+                        sx={{ textAlign: 'center', color: 'text.secondary' }}
                       />
                     </ListItem>
-                    <Divider />
-                  </React.Fragment>
-                ))}
-                {filteredConversations.length === 0 && (
-                  <ListItem>
-                    <ListItemText
-                      primary="No conversations found"
-                      sx={{ textAlign: 'center', color: 'text.secondary' }}
-                    />
-                  </ListItem>
-                )}
-              </List>
-            </>
-          )}
-        </Paper>
-
-        {/* Main Chat Area */}
-        <Paper sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
-          <Box sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
-            {getCurrentConversation().messages.map((msg, index) => (
-              <Box
-                key={index}
-                sx={{
-                  display: 'flex',
-                  justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                  mb: 2
-                }}
+                  )}
+                </List>
+              </>
+            )}
+            
+            {/* 设置按钮放在左下角 */}
+            <Box sx={{ mt: 'auto', pt: 2, borderTop: 1, borderColor: 'divider' }}>
+              <Button
+                fullWidth
+                variant="outlined"
+                startIcon={<SettingsIcon />}
+                onClick={() => setShowSettings(true)}
               >
-                <Paper
+                设置
+              </Button>
+            </Box>
+          </Paper>
+
+          {/* Main Chat Area */}
+          <Paper sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
+            <Box sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
+              {getCurrentConversation().messages.map((msg, index) => (
+                <Box
+                  key={index}
                   sx={{
-                    p: 2,
-                    maxWidth: '70%',
-                    backgroundColor: msg.role === 'user' ? 'primary.light' : 'grey.100'
+                    display: 'flex',
+                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                    mb: 2
                   }}
                 >
-                  <Typography variant="body1">{msg.content}</Typography>
-                  <Typography variant="caption" color="text.secondary">
-                    {new Date(msg.timestamp).toLocaleTimeString()}
-                  </Typography>
-                </Paper>
-              </Box>
-            ))}
-          </Box>
+                  <Paper
+                    sx={{
+                      p: 2,
+                      maxWidth: '70%',
+                      backgroundColor: msg.role === 'user' ? 'primary.light' : 'grey.100'
+                    }}
+                  >
+                    <Typography variant="body1">{msg.content}</Typography>
+                    {msg.model && (
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                        Model: {models.find(m => m.id === msg.model)?.name || msg.model}
+                      </Typography>
+                    )}
+                    <Typography variant="caption" color="text.secondary">
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </Typography>
+                  </Paper>
+                </Box>
+              ))}
+            </Box>
 
-          <Box sx={{ display: 'flex', gap: 1 }}>
-            <TextField
-              fullWidth
-              variant="outlined"
-              placeholder="Type your message..."
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-            />
-            <Button
-              variant="contained"
-              endIcon={<SendIcon />}
-              onClick={handleSend}
-            >
-              Send
-            </Button>
-          </Box>
-        </Paper>
-      </Box>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                fullWidth
+                variant="outlined"
+                placeholder="Type your message..."
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+              />
+              <Button
+                variant="contained"
+                endIcon={<SendIcon />}
+                onClick={handleSend}
+              >
+                Send
+              </Button>
+            </Box>
+          </Paper>
+        </Box>
+      )}
 
       {/* Edit Title Dialog */}
       <Dialog 
