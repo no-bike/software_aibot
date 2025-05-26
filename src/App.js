@@ -25,6 +25,8 @@ import {
   Switch,
   FormControlLabel
 } from '@mui/material';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import SendIcon from '@mui/icons-material/Send';
 import HistoryIcon from '@mui/icons-material/History';
 import AddIcon from '@mui/icons-material/Add';
@@ -34,7 +36,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Settings from './components/Settings';
-import { sendMessage } from './services/aiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI } from './services/apiService';
 
 const App = () => {
   const [message, setMessage] = useState('');
@@ -48,61 +50,47 @@ const App = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [models, setModels] = useState([]);
   const [mergeResponses, setMergeResponses] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // 从localStorage加载模型列表
+  // 从API加载模型列表
   useEffect(() => {
-    const loadModels = () => {
-      const savedModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const defaultModels = [
-        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', apiKey: '' },
-        { id: 'gpt-4', name: 'GPT-4', apiKey: '' },
-        { id: 'claude-2', name: 'Claude 2', apiKey: '' }
-      ];
-
-      // 合并默认模型和保存的模型，确保默认模型始终存在
-      const mergedModels = [...defaultModels];
-      savedModels.forEach(savedModel => {
-        // 如果保存的模型不是默认模型，则添加
-        if (!defaultModels.find(defaultModel => defaultModel.id === savedModel.id)) {
-          mergedModels.push(savedModel);
+    const loadModels = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const savedModels = await getModels();
+        setModels(savedModels);
+        
+        // 如果当前没有选中的模型，选择第一个
+        if (selectedModels.length === 0 && savedModels.length > 0) {
+          setSelectedModels([savedModels[0].id]);
         }
-      });
-
-      setModels(mergedModels);
-      
-      // 如果当前没有选中的模型，选择第一个
-      if (selectedModels.length === 0 && mergedModels.length > 0) {
-        setSelectedModels([mergedModels[0].id]);
+      } catch (error) {
+        console.error('Error loading models:', error);
+        setError('Failed to load models. Please try again later.');
+      } finally {
+        setLoading(false);
       }
     };
 
-    // 初始加载
     loadModels();
-
-    // 监听localStorage变化
-    const handleStorageChange = (e) => {
-      if (e.key === 'aiModels') {
-        loadModels();
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // 当模型列表变化时，确保选中的模型仍然有效
+  // 当模型选择变化时，通知后端
   useEffect(() => {
-    if (models.length > 0) {
-      const validSelectedModels = selectedModels.filter(modelId => 
-        models.find(model => model.id === modelId)
-      );
-      if (validSelectedModels.length === 0) {
-        setSelectedModels([models[0].id]);
-      } else if (validSelectedModels.length !== selectedModels.length) {
-        setSelectedModels(validSelectedModels);
+    const updateSelection = async () => {
+      if (selectedModels.length > 0) {
+        try {
+          await updateModelSelection(selectedModels);
+        } catch (error) {
+          console.error('Error updating model selection:', error);
+        }
       }
-    }
-  }, [models, selectedModels]);
+    };
+
+    updateSelection();
+  }, [selectedModels]);
 
   // 使用 useMemo 优化搜索性能
   const filteredConversations = useMemo(() => {
@@ -160,18 +148,13 @@ const App = () => {
     setMessage('');
 
     try {
-      const currentConversation = getCurrentConversation();
-      const messages = currentConversation.messages;
-
-      // 调用AI服务
-      const responses = await Promise.all(
-        selectedModels.map(modelId => sendMessage(modelId, messages))
-      );
-
+      // 调用API发送消息
+      const response = await sendMessageToAPI(message, selectedModels, currentConversationId);
+      
       let aiMessages;
-      if (mergeResponses && responses.length > 1) {
+      if (mergeResponses && response.responses.length > 1) {
         // 合并所有回答
-        const mergedContent = responses.join('\n\n---\n\n');
+        const mergedContent = response.responses.map(r => r.content).join('\n\n---\n\n');
         aiMessages = [{
           role: 'assistant',
           content: mergedContent,
@@ -180,10 +163,10 @@ const App = () => {
         }];
       } else {
         // 分别显示每个模型的回答
-        aiMessages = responses.map((response, index) => ({
+        aiMessages = response.responses.map(response => ({
           role: 'assistant',
-          content: response,
-          model: selectedModels[index],
+          content: response.content,
+          model: response.modelId,
           timestamp: new Date().toISOString()
         }));
       }
@@ -201,6 +184,25 @@ const App = () => {
       });
     } catch (error) {
       console.error('Error sending message:', error);
+      // 添加错误提示
+      const errorMessage = {
+        role: 'assistant',
+        content: `Error: ${error.message || 'Failed to get response'}`,
+        model: 'error',
+        timestamp: new Date().toISOString()
+      };
+      
+      setConversations(prevConversations => {
+        return prevConversations.map(conv => {
+          if (conv.id === currentConversationId) {
+            return {
+              ...conv,
+              messages: [...conv.messages, errorMessage]
+            };
+          }
+          return conv;
+        });
+      });
     }
   };
 
@@ -277,12 +279,33 @@ const App = () => {
                     ))}
                   </Box>
                 )}
+                disabled={loading}
               >
-                {models.map((model) => (
-                  <MenuItem key={model.id} value={model.id}>
-                    {model.name}
+                {loading ? (
+                  <MenuItem disabled>
+                    <Typography variant="body2" color="text.secondary">
+                      Loading models...
+                    </Typography>
                   </MenuItem>
-                ))}
+                ) : error ? (
+                  <MenuItem disabled>
+                    <Typography variant="body2" color="error">
+                      {error}
+                    </Typography>
+                  </MenuItem>
+                ) : models.length === 0 ? (
+                  <MenuItem disabled>
+                    <Typography variant="body2" color="text.secondary">
+                      No models available
+                    </Typography>
+                  </MenuItem>
+                ) : (
+                  models.map((model) => (
+                    <MenuItem key={model.id} value={model.id}>
+                      {model.name}
+                    </MenuItem>
+                  ))
+                )}
               </Select>
             </FormControl>
 
@@ -386,74 +409,179 @@ const App = () => {
 
           {/* Main Chat Area */}
           <Paper sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
-            {/* 添加融合回答的切换按钮 */}
-            {selectedModels.length > 1 && (
-              <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                <FormControlLabel
-                  control={
-                    <Switch
-                      checked={mergeResponses}
-                      onChange={(e) => setMergeResponses(e.target.checked)}
-                      color="primary"
-                    />
-                  }
-                  label={
-                    <Typography variant="body2" color="text.secondary">
-                      融合回答
-                    </Typography>
-                  }
-                />
+            {loading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                <Typography variant="body1" color="text.secondary">
+                  Loading models...
+                </Typography>
               </Box>
-            )}
+            ) : error ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                <Typography variant="body1" color="error">
+                  {error}
+                </Typography>
+              </Box>
+            ) : (
+              <>
+                {/* 添加融合回答的切换按钮 */}
+                {selectedModels.length > 1 && (
+                  <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={mergeResponses}
+                          onChange={(e) => setMergeResponses(e.target.checked)}
+                          color="primary"
+                        />
+                      }
+                      label={
+                        <Typography variant="body2" color="text.secondary">
+                          融合回答
+                        </Typography>
+                      }
+                    />
+                  </Box>
+                )}
 
-            <Box sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
-              {getCurrentConversation().messages.map((msg, index) => (
-                <Box
-                  key={index}
-                  sx={{
-                    display: 'flex',
-                    justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                    mb: 2
-                  }}
-                >
-                  <Paper
-                    sx={{
-                      p: 2,
-                      maxWidth: '70%',
-                      backgroundColor: msg.role === 'user' ? 'primary.light' : 'grey.100'
-                    }}
-                  >
-                    <Typography variant="body1">{msg.content}</Typography>
-                    {msg.model && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                        {msg.model === 'merged' ? '融合回答' : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
-                      </Typography>
-                    )}
-                    <Typography variant="caption" color="text.secondary">
-                      {new Date(msg.timestamp).toLocaleTimeString()}
-                    </Typography>
-                  </Paper>
+                <Box sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
+                  {getCurrentConversation().messages.map((msg, index) => (
+                    <Box
+                      key={index}
+                      sx={{
+                        display: 'flex',
+                        justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                        mb: 2
+                      }}
+                    >
+                      <Paper
+                        sx={{
+                          p: 2,
+                          maxWidth: '70%',
+                          backgroundColor: msg.role === 'user' 
+                            ? 'primary.light' 
+                            : msg.model === 'error'
+                              ? 'error.light'
+                              : 'grey.100'
+                        }}
+                      >
+                        {msg.role === 'user' ? (
+                          <Typography 
+                            variant="body1" 
+                            sx={{ 
+                              whiteSpace: 'pre-wrap',
+                              wordBreak: 'break-word'
+                            }}
+                          >
+                            {msg.content}
+                          </Typography>
+                        ) : (
+                          <Box sx={{ 
+                            '& pre': { 
+                              backgroundColor: 'rgba(0, 0, 0, 0.05)',
+                              padding: '1rem',
+                              borderRadius: '4px',
+                              overflowX: 'auto'
+                            },
+                            '& code': {
+                              backgroundColor: 'rgba(0, 0, 0, 0.05)',
+                              padding: '0.2rem 0.4rem',
+                              borderRadius: '3px',
+                              fontSize: '0.9em'
+                            },
+                            '& p': {
+                              margin: '0.5rem 0'
+                            },
+                            '& ul, & ol': {
+                              margin: '0.5rem 0',
+                              paddingLeft: '1.5rem'
+                            },
+                            '& table': {
+                              borderCollapse: 'collapse',
+                              width: '100%',
+                              margin: '0.5rem 0'
+                            },
+                            '& th, & td': {
+                              border: '1px solid #ddd',
+                              padding: '0.5rem',
+                              textAlign: 'left'
+                            },
+                            '& th': {
+                              backgroundColor: 'rgba(0, 0, 0, 0.05)'
+                            },
+                            '& blockquote': {
+                              borderLeft: '4px solid #ddd',
+                              margin: '0.5rem 0',
+                              padding: '0.5rem 0 0.5rem 1rem',
+                              color: 'text.secondary'
+                            }
+                          }}>
+                            <ReactMarkdown 
+                              remarkPlugins={[remarkGfm]}
+                              components={{
+                                code: ({node, inline, className, children, ...props}) => {
+                                  const match = /language-(\w+)/.exec(className || '');
+                                  return !inline ? (
+                                    <pre>
+                                      <code className={match ? `language-${match[1]}` : ''} {...props}>
+                                        {children}
+                                      </code>
+                                    </pre>
+                                  ) : (
+                                    <code className={className} {...props}>
+                                      {children}
+                                    </code>
+                                  );
+                                }
+                              }}
+                            >
+                              {msg.content}
+                            </ReactMarkdown>
+                          </Box>
+                        )}
+                        {msg.model && (
+                          <Typography 
+                            variant="caption" 
+                            color="text.secondary" 
+                            sx={{ 
+                              display: 'block', 
+                              mt: 1,
+                              color: msg.model === 'error' ? 'error.main' : 'text.secondary'
+                            }}
+                          >
+                            {msg.model === 'merged' 
+                              ? '融合回答' 
+                              : msg.model === 'error'
+                                ? '错误'
+                                : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
+                          </Typography>
+                        )}
+                        <Typography variant="caption" color="text.secondary">
+                          {new Date(msg.timestamp).toLocaleTimeString()}
+                        </Typography>
+                      </Paper>
+                    </Box>
+                  ))}
                 </Box>
-              ))}
-            </Box>
 
-            <Box sx={{ display: 'flex', gap: 1 }}>
-              <TextField
-                fullWidth
-                variant="outlined"
-                placeholder="Type your message..."
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-              />
-              <Button
-                variant="contained"
-                endIcon={<SendIcon />}
-                onClick={handleSend}
-              >
-                Send
-              </Button>
-            </Box>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                  <TextField
+                    fullWidth
+                    variant="outlined"
+                    placeholder="Type your message..."
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                  />
+                  <Button
+                    variant="contained"
+                    endIcon={<SendIcon />}
+                    onClick={handleSend}
+                  >
+                    Send
+                  </Button>
+                </Box>
+              </>
+            )}
           </Paper>
         </Box>
       )}
