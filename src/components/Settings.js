@@ -14,41 +14,64 @@ import {
   DialogContent,
   DialogActions,
   Paper,
+  Alert,
+  Snackbar
 } from '@mui/material';
 import { Delete as DeleteIcon, Add as AddIcon } from '@mui/icons-material';
+import { addModel, getModels } from '../services/apiService';
 
 const Settings = ({ onClose }) => {
   const [models, setModels] = useState([]);
-  const [newModel, setNewModel] = useState({ name: '', apiKey: '' });
+  const [newModel, setNewModel] = useState({ name: '', apiKey: '', id: '' });
   const [openDialog, setOpenDialog] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // 从localStorage加载已保存的模型
-    const savedModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-    setModels(savedModels);
+    loadModels();
   }, []);
 
-  const handleAddModel = () => {
-    if (newModel.name && newModel.apiKey) {
-      // 生成一个唯一的id，使用模型名称的小写形式，将空格替换为连字符
-      const modelId = newModel.name.toLowerCase().replace(/\s+/g, '-');
-      const modelWithId = {
-        ...newModel,
-        id: modelId
-      };
-      
-      const updatedModels = [...models, modelWithId];
-      setModels(updatedModels);
-      localStorage.setItem('aiModels', JSON.stringify(updatedModels));
-      setNewModel({ name: '', apiKey: '', id: '' });
-      setOpenDialog(false);
+  const loadModels = async () => {
+    try {
+      const savedModels = await getModels();
+      setModels(savedModels);
+    } catch (error) {
+      setError('Failed to load models');
     }
   };
 
-  const handleDeleteModel = (index) => {
-    const updatedModels = models.filter((_, i) => i !== index);
-    setModels(updatedModels);
-    localStorage.setItem('aiModels', JSON.stringify(updatedModels));
+  const handleAddModel = async () => {
+    if (newModel.name && newModel.apiKey) {
+      setLoading(true);
+      try {
+        // 生成一个唯一的id，使用模型名称的小写形式，将空格替换为连字符
+        const modelId = newModel.name.toLowerCase().replace(/\s+/g, '-');
+        const modelWithId = {
+          ...newModel,
+          id: modelId
+        };
+        
+        await addModel(modelWithId);
+        await loadModels(); // 重新加载模型列表
+        setNewModel({ name: '', apiKey: '', id: '' });
+        setOpenDialog(false);
+      } catch (error) {
+        setError('Failed to add model');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleDeleteModel = async (index) => {
+    try {
+      const modelToDelete = models[index];
+      // TODO: 添加删除模型的API调用
+      const updatedModels = models.filter((_, i) => i !== index);
+      setModels(updatedModels);
+    } catch (error) {
+      setError('Failed to delete model');
+    }
   };
 
   return (
@@ -83,6 +106,7 @@ const Settings = ({ onClose }) => {
           startIcon={<AddIcon />}
           onClick={() => setOpenDialog(true)}
           sx={{ mt: 2 }}
+          disabled={loading}
         >
           添加新模型
         </Button>
@@ -98,6 +122,8 @@ const Settings = ({ onClose }) => {
             fullWidth
             value={newModel.name}
             onChange={(e) => setNewModel({ ...newModel, name: e.target.value })}
+            helperText="模型名称将用于显示在下拉菜单中"
+            disabled={loading}
           />
           <TextField
             margin="dense"
@@ -105,11 +131,13 @@ const Settings = ({ onClose }) => {
             fullWidth
             value={newModel.apiKey}
             onChange={(e) => setNewModel({ ...newModel, apiKey: e.target.value })}
+            helperText="输入模型的API密钥"
+            disabled={loading}
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setOpenDialog(false)}>取消</Button>
-          <Button onClick={handleAddModel} variant="contained">
+          <Button onClick={() => setOpenDialog(false)} disabled={loading}>取消</Button>
+          <Button onClick={handleAddModel} variant="contained" disabled={loading}>
             添加
           </Button>
         </DialogActions>
@@ -123,6 +151,16 @@ const Settings = ({ onClose }) => {
       >
         返回
       </Button>
+
+      <Snackbar
+        open={!!error}
+        autoHideDuration={6000}
+        onClose={() => setError('')}
+      >
+        <Alert onClose={() => setError('')} severity="error">
+          {error}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

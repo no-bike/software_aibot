@@ -34,7 +34,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Settings from './components/Settings';
-import { sendMessage } from './services/aiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI } from './services/apiService';
 
 const App = () => {
   const [message, setMessage] = useState('');
@@ -49,60 +49,39 @@ const App = () => {
   const [models, setModels] = useState([]);
   const [mergeResponses, setMergeResponses] = useState(false);
 
-  // 从localStorage加载模型列表
+  // 从API加载模型列表
   useEffect(() => {
-    const loadModels = () => {
-      const savedModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      const defaultModels = [
-        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', apiKey: '' },
-        { id: 'gpt-4', name: 'GPT-4', apiKey: '' },
-        { id: 'claude-2', name: 'Claude 2', apiKey: '' }
-      ];
-
-      // 合并默认模型和保存的模型，确保默认模型始终存在
-      const mergedModels = [...defaultModels];
-      savedModels.forEach(savedModel => {
-        // 如果保存的模型不是默认模型，则添加
-        if (!defaultModels.find(defaultModel => defaultModel.id === savedModel.id)) {
-          mergedModels.push(savedModel);
+    const loadModels = async () => {
+      try {
+        const savedModels = await getModels();
+        setModels(savedModels);
+        
+        // 如果当前没有选中的模型，选择第一个
+        if (selectedModels.length === 0 && savedModels.length > 0) {
+          setSelectedModels([savedModels[0].id]);
         }
-      });
-
-      setModels(mergedModels);
-      
-      // 如果当前没有选中的模型，选择第一个
-      if (selectedModels.length === 0 && mergedModels.length > 0) {
-        setSelectedModels([mergedModels[0].id]);
+      } catch (error) {
+        console.error('Error loading models:', error);
       }
     };
 
-    // 初始加载
     loadModels();
-
-    // 监听localStorage变化
-    const handleStorageChange = (e) => {
-      if (e.key === 'aiModels') {
-        loadModels();
-      }
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  // 当模型列表变化时，确保选中的模型仍然有效
+  // 当模型选择变化时，通知后端
   useEffect(() => {
-    if (models.length > 0) {
-      const validSelectedModels = selectedModels.filter(modelId => 
-        models.find(model => model.id === modelId)
-      );
-      if (validSelectedModels.length === 0) {
-        setSelectedModels([models[0].id]);
-      } else if (validSelectedModels.length !== selectedModels.length) {
-        setSelectedModels(validSelectedModels);
+    const updateSelection = async () => {
+      if (selectedModels.length > 0) {
+        try {
+          await updateModelSelection(selectedModels);
+        } catch (error) {
+          console.error('Error updating model selection:', error);
+        }
       }
-    }
-  }, [models, selectedModels]);
+    };
+
+    updateSelection();
+  }, [selectedModels]);
 
   // 使用 useMemo 优化搜索性能
   const filteredConversations = useMemo(() => {
@@ -160,18 +139,13 @@ const App = () => {
     setMessage('');
 
     try {
-      const currentConversation = getCurrentConversation();
-      const messages = currentConversation.messages;
-
-      // 调用AI服务
-      const responses = await Promise.all(
-        selectedModels.map(modelId => sendMessage(modelId, messages))
-      );
-
+      // 调用API发送消息
+      const response = await sendMessageToAPI(message, selectedModels, currentConversationId);
+      
       let aiMessages;
-      if (mergeResponses && responses.length > 1) {
+      if (mergeResponses && response.responses.length > 1) {
         // 合并所有回答
-        const mergedContent = responses.join('\n\n---\n\n');
+        const mergedContent = response.responses.map(r => r.content).join('\n\n---\n\n');
         aiMessages = [{
           role: 'assistant',
           content: mergedContent,
@@ -180,10 +154,10 @@ const App = () => {
         }];
       } else {
         // 分别显示每个模型的回答
-        aiMessages = responses.map((response, index) => ({
+        aiMessages = response.responses.map(response => ({
           role: 'assistant',
-          content: response,
-          model: selectedModels[index],
+          content: response.content,
+          model: response.modelId,
           timestamp: new Date().toISOString()
         }));
       }
@@ -201,6 +175,7 @@ const App = () => {
       });
     } catch (error) {
       console.error('Error sending message:', error);
+      // TODO: 添加错误提示UI
     }
   };
 
