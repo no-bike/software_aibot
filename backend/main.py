@@ -27,6 +27,7 @@ class Model(BaseModel):
     id: str
     name: str
     apiKey: str
+    url: str
 
 class Message(BaseModel):
     content: str
@@ -50,18 +51,18 @@ class MessageRequest(BaseModel):
 
 # 内存存储
 models = [
-    {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "apiKey": ""},
-    {"id": "gpt-4", "name": "GPT-4", "apiKey": ""},
-    {"id": "claude-2", "name": "Claude 2", "apiKey": ""}
+    {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "apiKey": "", "url": "https://api.openai.com/v1"},
+    {"id": "gpt-4", "name": "GPT-4", "apiKey": "", "url": "https://api.openai.com/v1"},
+    {"id": "claude-2", "name": "Claude 2", "apiKey": "", "url": "https://api.anthropic.com"}
 ]
 
 conversations = {}
 selected_models = []
 
-async def get_openai_response(model_id: str, message: str, api_key: str) -> str:
+async def get_openai_response(model_id: str, message: str, api_key: str, url: str) -> str:
     """获取OpenAI模型的响应"""
     try:
-        client = openai.OpenAI(api_key=api_key)
+        client = openai.OpenAI(api_key=api_key, base_url=url)
         response = client.chat.completions.create(
             model=model_id,
             messages=[{"role": "user", "content": message}],
@@ -72,10 +73,10 @@ async def get_openai_response(model_id: str, message: str, api_key: str) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
 
-async def get_claude_response(message: str, api_key: str) -> str:
+async def get_claude_response(message: str, api_key: str, url: str) -> str:
     """获取Claude模型的响应"""
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key, base_url=url)
         response = client.messages.create(
             model="claude-2",
             max_tokens=1000,
@@ -114,17 +115,18 @@ async def send_message(request: MessageRequest):
         if not model_info:
             raise HTTPException(status_code=400, detail=f"Model {model_id} not found")
         
-        # 获取API密钥
+        # 获取API密钥和URL
         api_key = model_info["apiKey"]
+        url = model_info["url"]
         if not api_key:
             raise HTTPException(status_code=400, detail=f"API key not set for model {model_id}")
         
         try:
             # 根据模型类型调用相应的API
             if model_id.startswith("gpt"):
-                content = await get_openai_response(model_id, request.message, api_key)
+                content = await get_openai_response(model_id, request.message, api_key, url)
             elif model_id == "claude-2":
-                content = await get_claude_response(request.message, api_key)
+                content = await get_claude_response(request.message, api_key, url)
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported model: {model_id}")
             

@@ -238,10 +238,21 @@ const App = () => {
     return conversations.find(conv => conv.id === currentConversationId) || { messages: [] };
   };
 
+  const handleModelsUpdate = (updatedModels) => {
+    setModels(updatedModels);
+    // 如果当前没有选中的模型，选择第一个
+    if (selectedModels.length === 0 && updatedModels.length > 0) {
+      setSelectedModels([updatedModels[0].id]);
+    }
+  };
+
   return (
     <Container maxWidth="lg" sx={{ height: '100vh', py: 2 }}>
       {showSettings ? (
-        <Settings onClose={() => setShowSettings(false)} />
+        <Settings 
+          onClose={() => setShowSettings(false)} 
+          onModelsUpdate={handleModelsUpdate}
+        />
       ) : (
         <Box sx={{ display: 'flex', height: '100%', gap: 2 }}>
           {/* Sidebar */}
