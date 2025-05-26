@@ -53,21 +53,26 @@ const App = () => {
   useEffect(() => {
     const loadModels = () => {
       const savedModels = JSON.parse(localStorage.getItem('aiModels') || '[]');
-      if (savedModels.length > 0) {
-        setModels(savedModels);
-        // 如果当前没有选中的模型，选择第一个
-        if (selectedModels.length === 0 && savedModels.length > 0) {
-          setSelectedModels([savedModels[0].id]);
+      const defaultModels = [
+        { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', apiKey: '' },
+        { id: 'gpt-4', name: 'GPT-4', apiKey: '' },
+        { id: 'claude-2', name: 'Claude 2', apiKey: '' }
+      ];
+
+      // 合并默认模型和保存的模型，确保默认模型始终存在
+      const mergedModels = [...defaultModels];
+      savedModels.forEach(savedModel => {
+        // 如果保存的模型不是默认模型，则添加
+        if (!defaultModels.find(defaultModel => defaultModel.id === savedModel.id)) {
+          mergedModels.push(savedModel);
         }
-      } else {
-        // 如果没有保存的模型，设置默认模型
-        const defaultModels = [
-          { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', apiKey: '' },
-          { id: 'gpt-4', name: 'GPT-4', apiKey: '' },
-          { id: 'claude-2', name: 'Claude 2', apiKey: '' }
-        ];
-        setModels(defaultModels);
-        setSelectedModels(['gpt-3.5-turbo']);
+      });
+
+      setModels(mergedModels);
+      
+      // 如果当前没有选中的模型，选择第一个
+      if (selectedModels.length === 0 && mergedModels.length > 0) {
+        setSelectedModels([mergedModels[0].id]);
       }
     };
 
