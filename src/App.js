@@ -21,7 +21,9 @@ import {
   DialogContent,
   DialogActions,
   InputAdornment,
-  Chip
+  Chip,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import HistoryIcon from '@mui/icons-material/History';
@@ -45,6 +47,7 @@ const App = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [models, setModels] = useState([]);
+  const [mergeResponses, setMergeResponses] = useState(false);
 
   // 从localStorage加载模型列表
   useEffect(() => {
@@ -136,7 +139,6 @@ const App = () => {
     setConversations(prevConversations => {
       return prevConversations.map(conv => {
         if (conv.id === currentConversationId) {
-          // 如果是第一条消息，更新对话标题
           const updatedMessages = [...conv.messages, newMessage];
           const title = conv.messages.length === 0 ? message.slice(0, 30) + (message.length > 30 ? '...' : '') : conv.title;
           return {
@@ -153,22 +155,33 @@ const App = () => {
     setMessage('');
 
     try {
-      // 获取当前对话的所有消息
       const currentConversation = getCurrentConversation();
       const messages = currentConversation.messages;
 
-      // 调用AI服务 - 这里需要修改为支持多模型
+      // 调用AI服务
       const responses = await Promise.all(
         selectedModels.map(modelId => sendMessage(modelId, messages))
       );
 
-      // 添加AI响应
-      const aiMessages = responses.map((response, index) => ({
-        role: 'assistant',
-        content: response,
-        model: selectedModels[index],
-        timestamp: new Date().toISOString()
-      }));
+      let aiMessages;
+      if (mergeResponses && responses.length > 1) {
+        // 合并所有回答
+        const mergedContent = responses.join('\n\n---\n\n');
+        aiMessages = [{
+          role: 'assistant',
+          content: mergedContent,
+          model: 'merged',
+          timestamp: new Date().toISOString()
+        }];
+      } else {
+        // 分别显示每个模型的回答
+        aiMessages = responses.map((response, index) => ({
+          role: 'assistant',
+          content: response,
+          model: selectedModels[index],
+          timestamp: new Date().toISOString()
+        }));
+      }
 
       setConversations(prevConversations => {
         return prevConversations.map(conv => {
@@ -183,7 +196,6 @@ const App = () => {
       });
     } catch (error) {
       console.error('Error sending message:', error);
-      // 可以在这里添加错误处理UI提示
     }
   };
 
@@ -369,6 +381,26 @@ const App = () => {
 
           {/* Main Chat Area */}
           <Paper sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
+            {/* 添加融合回答的切换按钮 */}
+            {selectedModels.length > 1 && (
+              <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={mergeResponses}
+                      onChange={(e) => setMergeResponses(e.target.checked)}
+                      color="primary"
+                    />
+                  }
+                  label={
+                    <Typography variant="body2" color="text.secondary">
+                      融合回答
+                    </Typography>
+                  }
+                />
+              </Box>
+            )}
+
             <Box sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
               {getCurrentConversation().messages.map((msg, index) => (
                 <Box
@@ -389,7 +421,7 @@ const App = () => {
                     <Typography variant="body1">{msg.content}</Typography>
                     {msg.model && (
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                        Model: {models.find(m => m.id === msg.model)?.name || msg.model}
+                        {msg.model === 'merged' ? '融合回答' : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
                       </Typography>
                     )}
                     <Typography variant="caption" color="text.secondary">
