@@ -25,6 +25,8 @@ import {
   Switch,
   FormControlLabel
 } from '@mui/material';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import SendIcon from '@mui/icons-material/Send';
 import HistoryIcon from '@mui/icons-material/History';
 import AddIcon from '@mui/icons-material/Add';
@@ -175,7 +177,25 @@ const App = () => {
       });
     } catch (error) {
       console.error('Error sending message:', error);
-      // TODO: 添加错误提示UI
+      // 添加错误提示
+      const errorMessage = {
+        role: 'assistant',
+        content: `Error: ${error.message || 'Failed to get response'}`,
+        model: 'error',
+        timestamp: new Date().toISOString()
+      };
+      
+      setConversations(prevConversations => {
+        return prevConversations.map(conv => {
+          if (conv.id === currentConversationId) {
+            return {
+              ...conv,
+              messages: [...conv.messages, errorMessage]
+            };
+          }
+          return conv;
+        });
+      });
     }
   };
 
@@ -395,13 +415,102 @@ const App = () => {
                     sx={{
                       p: 2,
                       maxWidth: '70%',
-                      backgroundColor: msg.role === 'user' ? 'primary.light' : 'grey.100'
+                      backgroundColor: msg.role === 'user' 
+                        ? 'primary.light' 
+                        : msg.model === 'error'
+                          ? 'error.light'
+                          : 'grey.100'
                     }}
                   >
-                    <Typography variant="body1">{msg.content}</Typography>
+                    {msg.role === 'user' ? (
+                      <Typography 
+                        variant="body1" 
+                        sx={{ 
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word'
+                        }}
+                      >
+                        {msg.content}
+                      </Typography>
+                    ) : (
+                      <Box sx={{ 
+                        '& pre': { 
+                          backgroundColor: 'rgba(0, 0, 0, 0.05)',
+                          padding: '1rem',
+                          borderRadius: '4px',
+                          overflowX: 'auto'
+                        },
+                        '& code': {
+                          backgroundColor: 'rgba(0, 0, 0, 0.05)',
+                          padding: '0.2rem 0.4rem',
+                          borderRadius: '3px',
+                          fontSize: '0.9em'
+                        },
+                        '& p': {
+                          margin: '0.5rem 0'
+                        },
+                        '& ul, & ol': {
+                          margin: '0.5rem 0',
+                          paddingLeft: '1.5rem'
+                        },
+                        '& table': {
+                          borderCollapse: 'collapse',
+                          width: '100%',
+                          margin: '0.5rem 0'
+                        },
+                        '& th, & td': {
+                          border: '1px solid #ddd',
+                          padding: '0.5rem',
+                          textAlign: 'left'
+                        },
+                        '& th': {
+                          backgroundColor: 'rgba(0, 0, 0, 0.05)'
+                        },
+                        '& blockquote': {
+                          borderLeft: '4px solid #ddd',
+                          margin: '0.5rem 0',
+                          padding: '0.5rem 0 0.5rem 1rem',
+                          color: 'text.secondary'
+                        }
+                      }}>
+                        <ReactMarkdown 
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            code: ({node, inline, className, children, ...props}) => {
+                              const match = /language-(\w+)/.exec(className || '');
+                              return !inline ? (
+                                <pre>
+                                  <code className={match ? `language-${match[1]}` : ''} {...props}>
+                                    {children}
+                                  </code>
+                                </pre>
+                              ) : (
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                          }}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
+                      </Box>
+                    )}
                     {msg.model && (
-                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
-                        {msg.model === 'merged' ? '融合回答' : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
+                      <Typography 
+                        variant="caption" 
+                        color="text.secondary" 
+                        sx={{ 
+                          display: 'block', 
+                          mt: 1,
+                          color: msg.model === 'error' ? 'error.main' : 'text.secondary'
+                        }}
+                      >
+                        {msg.model === 'merged' 
+                          ? '融合回答' 
+                          : msg.model === 'error'
+                            ? '错误'
+                            : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
                       </Typography>
                     )}
                     <Typography variant="caption" color="text.secondary">
