@@ -18,12 +18,14 @@ GET /api/models
   {
     "id": "gpt-3.5-turbo",
     "name": "GPT-3.5 Turbo",
-    "apiKey": ""
+    "apiKey": "",
+    "url": "https://api.openai.com/v1"
   },
   {
     "id": "gpt-4",
     "name": "GPT-4",
-    "apiKey": ""
+    "apiKey": "",
+    "url": "https://api.openai.com/v1"
   }
 ]
 ```
@@ -38,7 +40,8 @@ POST /api/models
 {
   "id": "string",
   "name": "string",
-  "apiKey": "string"
+  "apiKey": "string",
+  "url": "string"
 }
 ```
 
@@ -47,7 +50,8 @@ POST /api/models
 {
   "id": "custom-model",
   "name": "Custom Model",
-  "apiKey": "sk-..."
+  "apiKey": "sk-...",
+  "url": "https://api.example.com/v1"
 }
 ```
 
@@ -111,6 +115,7 @@ interface Model {
   id: string;
   name: string;
   apiKey: string;
+  url: string;
 }
 ```
 
@@ -162,7 +167,8 @@ const models = await getModels();
 const newModel = await addModel({
   id: "custom-model",
   name: "Custom Model",
-  apiKey: "sk-..."
+  apiKey: "sk-...",
+  url: "https://api.example.com/v1"
 });
 ```
 
