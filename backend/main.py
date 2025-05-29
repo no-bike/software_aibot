@@ -43,9 +43,6 @@ async def test():
         }
     )
 
-# Deepseek API配置
-DEEPSEEK_API_KEY = "sk-1b4d26d8de8e4493b9bc15d218ce158d"
-DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
 
 # 数据模型
 class Model(BaseModel):
@@ -84,8 +81,8 @@ default_models = [
     {
         "id": "deepseek-chat",
         "name": "Deepseek Chat",
-        "apiKey": DEEPSEEK_API_KEY,
-        "url": DEEPSEEK_API_BASE
+        "apiKey": os.environ.get("DEEPSEEK_API_KEY", ""),
+        "url": os.environ.get("DEEPSEEK_API_BASE", "")
     }
 ]
 
@@ -95,8 +92,11 @@ for model in default_models:
 async def get_deepseek_response(message: str, conversation_history: List[Dict] = None) -> str:
     """调用Deepseek API获取响应"""
     async with httpx.AsyncClient() as client:
+        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        api_base = os.environ.get("DEEPSEEK_API_BASE", "")
+        
         headers = {
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         
@@ -106,7 +106,7 @@ async def get_deepseek_response(message: str, conversation_history: List[Dict] =
         messages.append({"role": "user", "content": message})
         
         try:
-            logger.info(f"发送请求到Deepseek API: {DEEPSEEK_API_BASE}/chat/completions")
+            logger.info(f"发送请求到Deepseek API: {api_base}/chat/completions")
             logger.info(f"消息历史: {messages}")
             
             payload = {
@@ -117,7 +117,7 @@ async def get_deepseek_response(message: str, conversation_history: List[Dict] =
             }
             
             response = await client.post(
-                f"{DEEPSEEK_API_BASE}/chat/completions",
+                f"{api_base}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=30.0
@@ -284,4 +284,4 @@ async def chat(request: MessageRequest):
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"
             }
-        ) 
+        )
