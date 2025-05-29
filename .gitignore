@@ -32,4 +32,7 @@ yarn-error.log*
 *.sw?
 
 # Electron
-/out 
+/out
+
+# Backend files
+backend/api.txt
