@@ -10,6 +10,8 @@ import os
 import asyncio
 import logging
 import traceback
+from services.deepseek_service import get_deepseek_response
+from services.sparkx1_service import get_sparkx1_response
 
 # 配置日志
 logging.basicConfig(
@@ -83,64 +85,20 @@ default_models = [
         "name": "Deepseek Chat",
         "apiKey": os.environ.get("DEEPSEEK_API_KEY", ""),
         "url": os.environ.get("DEEPSEEK_API_BASE", "")
+    },
+    {
+        "id": "sparkx1",
+        "name": "讯飞SparkX1",
+        "apiKey": os.environ.get("SPARKX1_API_KEY", ""),
+        "apiSecret": os.environ.get("SPARKX1_API_SECRET", ""),
+        "appId": os.environ.get("SPARKX1_APP_ID", ""),
+        "url": os.environ.get("SPARKX1_API_BASE", "")
     }
 ]
 
 for model in default_models:
     models[model["id"]] = model
 
-async def get_deepseek_response(message: str, conversation_history: List[Dict] = None) -> str:
-    """调用Deepseek API获取响应"""
-    async with httpx.AsyncClient() as client:
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        api_base = os.environ.get("DEEPSEEK_API_BASE", "")
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        messages = []
-        if conversation_history:
-            messages.extend(conversation_history)
-        messages.append({"role": "user", "content": message})
-        
-        try:
-            logger.info(f"发送请求到Deepseek API: {api_base}/chat/completions")
-            logger.info(f"消息历史: {messages}")
-            
-            payload = {
-                "model": "deepseek-chat",
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 2000
-            }
-            
-            response = await client.post(
-                f"{api_base}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=30.0
-            )
-            
-            logger.info(f"Deepseek API响应状态码: {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"Deepseek API响应: {result}")
-                if "choices" in result and len(result["choices"]) > 0:
-                    return result["choices"][0]["message"]["content"]
-                else:
-                    raise HTTPException(status_code=500, 
-                                      detail="Deepseek API返回的响应格式不正确")
-            else:
-                logger.error(f"Deepseek API错误响应: {response.text}")
-                raise HTTPException(status_code=response.status_code, 
-                                  detail=f"Deepseek API错误: {response.text}")
-        except Exception as e:
-            logger.error(f"处理Deepseek API响应时发生错误: {str(e)}")
-            raise HTTPException(status_code=500, 
-                              detail=f"调用Deepseek API时发生错误: {str(e)}")
 
 @app.get("/api/models")
 async def get_models():
@@ -231,7 +189,12 @@ async def chat(request: MessageRequest):
                     logger.info(f"会话历史: {history}")
                 
                 logger.info(f"正在调用模型 {model_id} 的API")
-                ai_content = await get_deepseek_response(request.message, history)
+                if model_id == "deepseek-chat":
+                    ai_content = await get_deepseek_response(request.message, history)
+                elif model_id == "sparkx1":
+                    ai_content = await get_sparkx1_response(request.message, history)
+                else:
+                    raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
                 logger.info(f"收到AI响应: {ai_content}")
                 
                 response = {

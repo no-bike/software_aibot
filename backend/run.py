@@ -10,6 +10,8 @@ if __name__ == "__main__":
     # 设置环境变量
     os.environ["DEEPSEEK_API_KEY"] = config['DEEPSEEK']['API_KEY']
     os.environ["DEEPSEEK_API_BASE"] = config['DEEPSEEK']['API_BASE']
+    os.environ["SPARKX1_API_TOKEN"] = config['SPARKX1']['API_TOKEN']
+    os.environ["SPARKX1_API_BASE"] = config['SPARKX1']['API_BASE']
     
     # 启动服务器
     uvicorn.run(
