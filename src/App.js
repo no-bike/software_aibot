@@ -104,40 +104,69 @@ const App = () => {
 
   const createNewConversation = () => {
     const newConversation = {
-      id: Date.now(),
+      id: Date.now().toString(),  // 确保ID是字符串类型
       title: 'New Conversation',
       messages: [],
       models: selectedModels,
       createdAt: new Date().toISOString()
     };
-    setConversations([newConversation, ...conversations]);
-    setCurrentConversationId(newConversation.id);
+    setConversations(prevConversations => [newConversation, ...prevConversations]);
+    return newConversation.id;  // 返回新创建的对话ID
   };
 
   const handleSend = async () => {
     if (!message.trim()) return;
+    
+    // 如果没有选择模型，显示错误
+    if (selectedModels.length === 0) {
+      const errorMessage = {
+        role: 'assistant',
+        content: '错误: 请先选择至少一个AI模型',
+        model: 'error',
+        timestamp: new Date().toISOString()
+      };
+      
+      if (currentConversationId) {
+        setConversations(prevConversations => {
+          return prevConversations.map(conv => {
+            if (conv.id === currentConversationId) {
+              return {
+                ...conv,
+                messages: [...conv.messages, errorMessage]
+              };
+            }
+            return conv;
+          });
+        });
+      }
+      return;
+    }
 
+    const currentMessage = message;
+    setMessage('');  // 清空输入框
+
+    // 确保有对话ID
+    let conversationId = currentConversationId;
+    if (!conversationId) {
+      conversationId = createNewConversation();
+      setCurrentConversationId(conversationId);
+    }
+
+    // 创建用户消息
     const newMessage = {
       role: 'user',
-      content: message,
+      content: currentMessage,
       timestamp: new Date().toISOString()
     };
 
-    // 如果是新对话，创建对话
-    if (!currentConversationId) {
-      createNewConversation();
-    }
-
-    // 更新对话
+    // 立即更新对话
     setConversations(prevConversations => {
       return prevConversations.map(conv => {
-        if (conv.id === currentConversationId) {
-          const updatedMessages = [...conv.messages, newMessage];
-          const title = conv.messages.length === 0 ? message.slice(0, 30) + (message.length > 30 ? '...' : '') : conv.title;
+        if (conv.id === conversationId) {
           return {
             ...conv,
-            title,
-            messages: updatedMessages,
+            title: conv.messages.length === 0 ? currentMessage.slice(0, 30) + (currentMessage.length > 30 ? '...' : '') : conv.title,
+            messages: [...conv.messages, newMessage],
             models: selectedModels
           };
         }
@@ -145,11 +174,20 @@ const App = () => {
       });
     });
 
-    setMessage('');
-
     try {
+      console.log('发送消息:', {
+        message: currentMessage,
+        modelIds: selectedModels,
+        conversationId: conversationId
+      });
+
       // 调用API发送消息
-      const response = await sendMessageToAPI(message, selectedModels, currentConversationId);
+      const response = await sendMessageToAPI(currentMessage, selectedModels, conversationId);
+      console.log('收到API响应:', response);
+
+      if (!response || !response.responses) {
+        throw new Error('服务器返回的响应格式不正确');
+      }
       
       let aiMessages;
       if (mergeResponses && response.responses.length > 1) {
@@ -171,30 +209,35 @@ const App = () => {
         }));
       }
 
+      console.log('处理后的AI消息:', aiMessages);
+
+      // 更新对话内容
       setConversations(prevConversations => {
         return prevConversations.map(conv => {
-          if (conv.id === currentConversationId) {
+          if (conv.id === conversationId) {
+            const updatedMessages = [...conv.messages, ...aiMessages];
             return {
               ...conv,
-              messages: [...conv.messages, ...aiMessages]
+              messages: updatedMessages
             };
           }
           return conv;
         });
       });
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('发送消息时出错:', error);
+      
       // 添加错误提示
       const errorMessage = {
         role: 'assistant',
-        content: `Error: ${error.message || 'Failed to get response'}`,
+        content: `错误: ${error.message || '无法获取AI响应'}`,
         model: 'error',
         timestamp: new Date().toISOString()
       };
       
       setConversations(prevConversations => {
         return prevConversations.map(conv => {
-          if (conv.id === currentConversationId) {
+          if (conv.id === conversationId) {
             return {
               ...conv,
               messages: [...conv.messages, errorMessage]
