@@ -1,26 +1,51 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import List, Optional
-import uvicorn
-import openai
-import anthropic
+from typing import List, Optional, Dict
+import json
+from datetime import datetime
+import httpx
 import os
-from dotenv import load_dotenv
+import asyncio
+import logging
+import traceback
 
-# 加载环境变量
-load_dotenv()
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# 配置CORS
+# 配置CORS - 添加更多允许的头部和方法
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # 前端开发服务器地址
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"],
+    max_age=3600,
 )
+
+# 添加测试路由
+@app.get("/api/test")
+async def test():
+    logger.info("测试路由被调用")
+    return JSONResponse(
+        content={"message": "API服务正常运行"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Credentials": "true"
+        }
+    )
+
+# Deepseek API配置
+DEEPSEEK_API_KEY = "sk-1b4d26d8de8e4493b9bc15d218ce158d"
+DEEPSEEK_API_BASE = "https://api.deepseek.com/v1"
 
 # 数据模型
 class Model(BaseModel):
@@ -50,94 +75,213 @@ class MessageRequest(BaseModel):
     conversationId: Optional[str] = None
 
 # 内存存储
-models = [
-    {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo", "apiKey": "", "url": "https://api.openai.com/v1"},
-    {"id": "gpt-4", "name": "GPT-4", "apiKey": "", "url": "https://api.openai.com/v1"},
-    {"id": "claude-2", "name": "Claude 2", "apiKey": "", "url": "https://api.anthropic.com"}
+models = {}
+selected_models = []
+conversations = {}
+
+# 初始化默认模型
+default_models = [
+    {
+        "id": "deepseek-chat",
+        "name": "Deepseek Chat",
+        "apiKey": DEEPSEEK_API_KEY,
+        "url": DEEPSEEK_API_BASE
+    }
 ]
 
-conversations = {}
-selected_models = []
+for model in default_models:
+    models[model["id"]] = model
 
-async def get_openai_response(model_id: str, message: str, api_key: str, url: str) -> str:
-    """获取OpenAI模型的响应"""
-    try:
-        client = openai.OpenAI(api_key=api_key, base_url=url)
-        response = client.chat.completions.create(
-            model=model_id,
-            messages=[{"role": "user", "content": message}],
-            temperature=0.7,
-            max_tokens=1000
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"OpenAI API error: {str(e)}")
-
-async def get_claude_response(message: str, api_key: str, url: str) -> str:
-    """获取Claude模型的响应"""
-    try:
-        client = anthropic.Anthropic(api_key=api_key, base_url=url)
-        response = client.messages.create(
-            model="claude-2",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": message}]
-        )
-        return response.content[0].text
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Claude API error: {str(e)}")
+async def get_deepseek_response(message: str, conversation_history: List[Dict] = None) -> str:
+    """调用Deepseek API获取响应"""
+    async with httpx.AsyncClient() as client:
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        messages = []
+        if conversation_history:
+            messages.extend(conversation_history)
+        messages.append({"role": "user", "content": message})
+        
+        try:
+            logger.info(f"发送请求到Deepseek API: {DEEPSEEK_API_BASE}/chat/completions")
+            logger.info(f"消息历史: {messages}")
+            
+            payload = {
+                "model": "deepseek-chat",
+                "messages": messages,
+                "temperature": 0.7,
+                "max_tokens": 2000
+            }
+            
+            response = await client.post(
+                f"{DEEPSEEK_API_BASE}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30.0
+            )
+            
+            logger.info(f"Deepseek API响应状态码: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"Deepseek API响应: {result}")
+                if "choices" in result and len(result["choices"]) > 0:
+                    return result["choices"][0]["message"]["content"]
+                else:
+                    raise HTTPException(status_code=500, 
+                                      detail="Deepseek API返回的响应格式不正确")
+            else:
+                logger.error(f"Deepseek API错误响应: {response.text}")
+                raise HTTPException(status_code=response.status_code, 
+                                  detail=f"Deepseek API错误: {response.text}")
+        except Exception as e:
+            logger.error(f"处理Deepseek API响应时发生错误: {str(e)}")
+            raise HTTPException(status_code=500, 
+                              detail=f"调用Deepseek API时发生错误: {str(e)}")
 
 @app.get("/api/models")
 async def get_models():
-    return models
+    return JSONResponse(content=list(models.values()))
 
 @app.post("/api/models")
 async def add_model(model: Model):
-    # 检查模型ID是否已存在
-    if any(m["id"] == model.id for m in models):
-        raise HTTPException(status_code=400, detail="Model ID already exists")
-    
-    models.append(model.dict())
-    return model
+    if model.id in models:
+        raise HTTPException(status_code=400, detail="模型ID已存在")
+    models[model.id] = model.dict()
+    return JSONResponse(content=model.dict())
 
 @app.post("/api/models/selection")
 async def update_model_selection(model_ids: List[str]):
     global selected_models
+    for model_id in model_ids:
+        if model_id not in models:
+            raise HTTPException(status_code=400, detail=f"找不到模型ID {model_id}")
     selected_models = model_ids
-    return {"selected_models": selected_models}
+    return JSONResponse(content={"selected_models": selected_models})
 
 @app.post("/api/chat")
-async def send_message(request: MessageRequest):
-    responses = []
-    
-    for model_id in request.modelIds:
-        # 获取模型信息
-        model_info = next((m for m in models if m["id"] == model_id), None)
-        if not model_info:
-            raise HTTPException(status_code=400, detail=f"Model {model_id} not found")
+async def chat(request: MessageRequest):
+    try:
+        logger.info(f"收到聊天请求: {request.dict()}")
         
-        # 获取API密钥和URL
-        api_key = model_info["apiKey"]
-        url = model_info["url"]
-        if not api_key:
-            raise HTTPException(status_code=400, detail=f"API key not set for model {model_id}")
+        if not request.modelIds:
+            logger.error("模型ID列表为空")
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "模型ID不能为空"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
         
-        try:
-            # 根据模型类型调用相应的API
-            if model_id.startswith("gpt"):
-                content = await get_openai_response(model_id, request.message, api_key, url)
-            elif model_id == "claude-2":
-                content = await get_claude_response(request.message, api_key, url)
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported model: {model_id}")
-            
-            responses.append({
-                "modelId": model_id,
-                "content": content
-            })
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        # 验证所有模型ID
+        for model_id in request.modelIds:
+            if model_id not in models:
+                logger.error(f"找不到模型ID: {model_id}")
+                return JSONResponse(
+                    status_code=400,
+                    content={"detail": f"找不到模型ID {model_id}"},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+        
+        # 获取或创建会话
+        conversation = None
+        if request.conversationId:
+            if request.conversationId not in conversations:
+                logger.info(f"创建新会话: {request.conversationId}")
+                conversations[request.conversationId] = {
+                    "id": request.conversationId,
+                    "title": f"对话 {len(conversations) + 1}",
+                    "messages": [],
+                    "models": request.modelIds
+                }
+            conversation = conversations[request.conversationId]
+            logger.info(f"当前会话信息: {conversation}")
+        
+        # 添加用户消息
+        user_message = {
+            "content": request.message,
+            "role": "user",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+        if conversation:
+            conversation["messages"].append(user_message)
+            logger.info(f"添加用户消息到会话: {user_message}")
+        
+        # 获取AI响应
+        responses = []
+        for model_id in request.modelIds:
+            try:
+                # 准备会话历史
+                history = []
+                if conversation:
+                    for msg in conversation["messages"][:-1]:  # 不包含刚刚添加的用户消息
+                        history.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                    logger.info(f"会话历史: {history}")
+                
+                logger.info(f"正在调用模型 {model_id} 的API")
+                ai_content = await get_deepseek_response(request.message, history)
+                logger.info(f"收到AI响应: {ai_content}")
+                
+                response = {
+                    "modelId": model_id,
+                    "content": ai_content
+                }
+                responses.append(response)
+                
+                if conversation:
+                    # 添加AI响应到会话
+                    ai_message = {
+                        "content": ai_content,
+                        "role": "assistant",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }
+                    conversation["messages"].append(ai_message)
+                    logger.info(f"添加AI响应到会话: {ai_message}")
+                    
+            except Exception as e:
+                error_msg = f"处理模型 {model_id} 的响应时发生错误: {str(e)}\n{traceback.format_exc()}"
+                logger.error(error_msg)
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": error_msg},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+        
+        response_data = {"responses": responses}
+        logger.info(f"返回最终响应: {response_data}")
+        return JSONResponse(
+            status_code=200,
+            content=response_data,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true",
+                "Content-Type": "application/json"
+            }
+        )
     
-    return {"responses": responses}
-
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
+    except Exception as e:
+        error_msg = f"处理聊天请求时发生错误: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        ) 
