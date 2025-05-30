@@ -12,6 +12,7 @@ import logging
 import traceback
 from services.deepseek_service import get_deepseek_response
 from services.sparkx1_service import get_sparkx1_response
+from services.fusion_service import get_fusion_response
 
 # 配置日志
 logging.basicConfig(
@@ -71,6 +72,10 @@ class ModelResponse(BaseModel):
 class MessageRequest(BaseModel):
     message: str
     modelIds: List[str]
+    conversationId: Optional[str] = None
+
+class FusionRequest(BaseModel):
+    responses: List[Dict[str, str]]
     conversationId: Optional[str] = None
 
 # 内存存储
@@ -239,6 +244,65 @@ async def chat(request: MessageRequest):
     
     except Exception as e:
         error_msg = f"处理聊天请求时发生错误: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.post("/api/fusion")
+async def fusion_response(request: FusionRequest):
+    try:
+        logger.info(f"收到融合请求: {request.dict()}")
+        
+        if not request.responses or len(request.responses) < 2:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "融合需要至少两个模型的回答"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 获取会话历史（如果有）
+        history = []
+        if request.conversationId and request.conversationId in conversations:
+            conversation = conversations[request.conversationId]
+            history = [
+                {"role": msg["role"], "content": msg["content"]}
+                for msg in conversation["messages"][:-1]  # 不包括最新的用户消息
+            ]
+        
+        # 调用融合服务
+        fused_content = await get_fusion_response(request.responses, history)
+        
+        # 如果存在会话ID，将融合结果添加到会话历史
+        if request.conversationId and request.conversationId in conversations:
+            fusion_message = {
+                "content": fused_content,
+                "role": "assistant",
+                "model": "fusion",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            conversations[request.conversationId]["messages"].append(fusion_message)
+            logger.info(f"添加融合回答到会话: {fusion_message}")
+        
+        return JSONResponse(
+            status_code=200,
+            content={"fusedContent": fused_content},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        error_msg = f"处理融合请求时发生错误: {str(e)}\n{traceback.format_exc()}"
         logger.error(error_msg)
         return JSONResponse(
             status_code=500,

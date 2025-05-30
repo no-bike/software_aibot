@@ -84,4 +84,29 @@ export const sendMessage = async (message, modelIds, conversationId) => {
     console.error('Error sending message:', error);
     throw error;
   }
+};
+
+// 融合多个模型的回答
+export const fusionResponses = async (responses, conversationId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/fusion`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        responses,
+        conversationId,
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fusion responses');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error fusion responses:', error);
+    throw error;
+  }
 }; 

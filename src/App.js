@@ -36,7 +36,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Settings from './components/Settings';
-import { getModels, updateModelSelection, sendMessage as sendMessageToAPI } from './services/apiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses } from './services/apiService';
 
 const App = () => {
   const [message, setMessage] = useState('');
@@ -191,14 +191,25 @@ const App = () => {
       
       let aiMessages;
       if (mergeResponses && response.responses.length > 1) {
-        // 合并所有回答
-        const mergedContent = response.responses.map(r => r.content).join('\n\n---\n\n');
-        aiMessages = [{
-          role: 'assistant',
-          content: mergedContent,
-          model: 'merged',
-          timestamp: new Date().toISOString()
-        }];
+        try {
+          // 调用融合API
+          const fusionResult = await fusionResponses(response.responses, conversationId);
+          aiMessages = [{
+            role: 'assistant',
+            content: fusionResult.fusedContent,
+            model: 'fusion',
+            timestamp: new Date().toISOString()
+          }];
+        } catch (fusionError) {
+          console.error('融合回答失败:', fusionError);
+          // 如果融合失败，回退到分别显示每个模型的回答
+          aiMessages = response.responses.map(response => ({
+            role: 'assistant',
+            content: response.content,
+            model: response.modelId,
+            timestamp: new Date().toISOString()
+          }));
+        }
       } else {
         // 分别显示每个模型的回答
         aiMessages = response.responses.map(response => ({
