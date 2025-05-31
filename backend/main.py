@@ -12,6 +12,7 @@ import logging
 import traceback
 from services.deepseek_service import get_deepseek_response
 from services.sparkx1_service import get_sparkx1_response
+from services.moonshot_service import get_moonshot_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 
 # 配置日志
@@ -53,6 +54,8 @@ class Model(BaseModel):
     name: str
     apiKey: str
     url: str
+    apiSecret: Optional[str] = None
+    appId: Optional[str] = None
 
 class Message(BaseModel):
     content: str
@@ -119,10 +122,58 @@ async def get_models():
 
 @app.post("/api/models")
 async def add_model(model: Model):
-    if model.id in models:
-        raise HTTPException(status_code=400, detail="模型ID已存在")
-    models[model.id] = model.dict()
-    return JSONResponse(content=model.dict())
+    try:
+        logger.info(f"收到添加模型请求: {model.id}")
+        
+        # 验证必要字段
+        if not model.id or not model.name or not model.apiKey:
+            error_msg = "缺少必要字段 (id, name, apiKey)"
+            logger.error(error_msg)
+            return JSONResponse(
+                status_code=400,
+                content={"detail": error_msg},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 检查模型ID是否已存在
+        if model.id in models:
+            error_msg = f"模型ID {model.id} 已存在"
+            logger.error(error_msg)
+            return JSONResponse(
+                status_code=400,
+                content={"detail": error_msg},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 添加模型
+        model_dict = model.dict(exclude_unset=True)  # 只包含已设置的字段
+        models[model.id] = model_dict
+        logger.info(f"成功添加模型: {model.id}")
+        
+        return JSONResponse(
+            content=model_dict,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        error_msg = f"添加模型时发生错误: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
 
 @app.post("/api/models/selection")
 async def update_model_selection(model_ids: List[str]):
@@ -202,24 +253,31 @@ async def chat(request: MessageRequest):
                     logger.info(f"会话历史: {history}")
                 
                 logger.info(f"正在调用模型 {model_id} 的API")
+                response_content = None
                 if model_id == "deepseek-chat":
-                    ai_content = await get_deepseek_response(request.message, history)
+                    response_content = await get_deepseek_response(request.message, history)
                 elif model_id == "sparkx1":
-                    ai_content = await get_sparkx1_response(request.message, history)
+                    response_content = await get_sparkx1_response(request.message, history)
+                elif model_id == "moonshot":
+                    # 获取moonshot的API配置
+                    api_config = models.get(model_id)
+                    if not api_config:
+                        raise HTTPException(status_code=400, detail="Moonshot模型未配置")
+                    response_content = await get_moonshot_response(request.message, history, api_config)
                 else:
                     raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
-                logger.info(f"收到AI响应: {ai_content}")
+                logger.info(f"收到AI响应: {response_content}")
                 
                 response = {
                     "modelId": model_id,
-                    "content": ai_content
+                    "content": response_content
                 }
                 responses.append(response)
                 
                 if conversation:
                     # 添加AI响应到会话
                     ai_message = {
-                        "content": ai_content,
+                        "content": response_content,
                         "role": "assistant",
                         "timestamp": datetime.utcnow().isoformat()
                     }
@@ -452,6 +510,65 @@ async def fusion_status():
     except Exception as e:
         error_msg = f"获取融合状态时发生错误: {str(e)}"
         logger.error(error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.delete("/api/models/{model_id}")
+async def delete_model(model_id: str):
+    try:
+        logger.info(f"收到删除模型请求: {model_id}")
+        
+        # 检查模型是否存在
+        if model_id not in models:
+            error_msg = f"模型 {model_id} 不存在"
+            logger.error(error_msg)
+            return JSONResponse(
+                status_code=404,
+                content={"detail": error_msg},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 检查是否为默认模型
+        if any(model["id"] == model_id for model in default_models):
+            error_msg = f"不能删除默认模型: {model_id}"
+            logger.error(error_msg)
+            return JSONResponse(
+                status_code=400,
+                content={"detail": error_msg},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 从选中的模型列表中移除
+        global selected_models
+        if model_id in selected_models:
+            selected_models.remove(model_id)
+        
+        # 删除模型
+        deleted_model = models.pop(model_id)
+        logger.info(f"成功删除模型: {model_id}")
+        
+        return JSONResponse(
+            content={"message": f"模型 {model_id} 已成功删除", "model": deleted_model},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        error_msg = f"删除模型时发生错误: {str(e)}"
+        logger.error(f"{error_msg}\n{traceback.format_exc()}")
         return JSONResponse(
             status_code=500,
             content={"detail": error_msg},
