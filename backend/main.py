@@ -12,7 +12,7 @@ import logging
 import traceback
 from services.deepseek_service import get_deepseek_response
 from services.sparkx1_service import get_sparkx1_response
-from services.fusion_service import get_fusion_response
+from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 
 # 配置日志
 logging.basicConfig(
@@ -76,6 +76,14 @@ class MessageRequest(BaseModel):
 
 class FusionRequest(BaseModel):
     responses: List[Dict[str, str]]
+    conversationId: Optional[str] = None
+
+# 新增：高级融合请求模型
+class AdvancedFusionRequest(BaseModel):
+    query: str
+    responses: List[Dict[str, str]]
+    fusionMethod: Optional[str] = "rank_and_fuse"  # "rank_only", "fuse_only", "rank_and_fuse"
+    topK: Optional[int] = 3
     conversationId: Optional[str] = None
 
 # 内存存储
@@ -303,6 +311,146 @@ async def fusion_response(request: FusionRequest):
         
     except Exception as e:
         error_msg = f"处理融合请求时发生错误: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.post("/api/fusion/advanced")
+async def advanced_fusion_response(request: AdvancedFusionRequest):
+    """
+    高级融合接口 - 使用 LLM-Blender 进行智能融合
+    
+    支持三种融合模式：
+    - rank_only: 只进行质量排序，返回最优回答
+    - fuse_only: 只进行生成融合，不排序
+    - rank_and_fuse: 先排序再融合（推荐）
+    """
+    try:
+        logger.info(f"收到高级融合请求: {request.dict()}")
+        
+        if not request.responses or len(request.responses) < 1:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "融合需要至少一个模型的回答"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 转换响应格式以匹配服务接口
+        formatted_responses = []
+        for resp in request.responses:
+            formatted_responses.append({
+                "modelId": resp.get("modelId", "unknown"),
+                "content": resp.get("content", "")
+            })
+        
+        # 调用高级融合服务
+        start_time = datetime.utcnow()
+        result = await get_advanced_fusion_response_direct(
+            query=request.query,
+            responses=formatted_responses,
+            fusion_method=request.fusionMethod,
+            top_k=request.topK
+        )
+        end_time = datetime.utcnow()
+        
+        # 计算处理时间
+        processing_time = (end_time - start_time).total_seconds()
+        result["processing_time"] = processing_time
+        
+        # 如果存在会话ID，将融合结果添加到会话历史
+        if request.conversationId and request.conversationId in conversations:
+            fusion_message = {
+                "content": result["fused_content"],
+                "role": "assistant",
+                "model": "llm_blender",
+                "fusion_method": result.get("fusion_method", "unknown"),
+                "models_used": result.get("models_used", []),
+                "timestamp": end_time.isoformat()
+            }
+            conversations[request.conversationId]["messages"].append(fusion_message)
+            logger.info(f"添加高级融合回答到会话: {fusion_message}")
+        
+        logger.info(f"✅ 高级融合完成，方法: {result.get('fusion_method')}, 耗时: {processing_time:.2f}s")
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "fusedContent": result["fused_content"],
+                "rankedResponses": result.get("ranked_responses", []),
+                "bestResponse": result.get("best_response"),
+                "fusionMethod": result.get("fusion_method"),
+                "modelsUsed": result.get("models_used", []),
+                "processingTime": processing_time,
+                "error": result.get("error")
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        error_msg = f"处理高级融合请求时发生错误: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.get("/api/fusion/status")
+async def fusion_status():
+    """
+    获取融合服务状态
+    """
+    try:
+        from services.llm_blender_service import get_blender_service
+        
+        # 尝试获取服务状态
+        try:
+            service = await get_blender_service()
+            status = {
+                "llm_blender_available": True,
+                "ranker_loaded": service.ranker_loaded,
+                "fuser_loaded": service.fuser_loaded,
+                "is_initialized": service.is_initialized,
+                "supported_methods": ["rank_only", "fuse_only", "rank_and_fuse"],
+                "recommended_method": "rank_and_fuse" if service.fuser_loaded else "rank_only"
+            }
+        except Exception as e:
+            status = {
+                "llm_blender_available": False,
+                "ranker_loaded": False,
+                "fuser_loaded": False,
+                "is_initialized": False,
+                "error": str(e),
+                "fallback_available": True,
+                "supported_methods": ["traditional_fusion"]
+            }
+        
+        return JSONResponse(
+            status_code=200,
+            content=status,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        error_msg = f"获取融合状态时发生错误: {str(e)}"
         logger.error(error_msg)
         return JSONResponse(
             status_code=500,
