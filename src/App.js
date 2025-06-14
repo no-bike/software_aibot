@@ -114,6 +114,8 @@ const App = () => {
     return newConversation.id;  // 返回新创建的对话ID
   };
 
+  const [streamingContent, setStreamingContent] = useState('');
+
   const handleSend = async () => {
     if (!message.trim()) return;
     
@@ -144,6 +146,7 @@ const App = () => {
 
     const currentMessage = message;
     setMessage('');  // 清空输入框
+    setStreamingContent(''); // 重置流式内容
 
     // 确保有对话ID
     let conversationId = currentConversationId;
@@ -181,28 +184,118 @@ const App = () => {
         conversationId: conversationId
       });
 
-      // 调用API发送消息
-      const response = await sendMessageToAPI(currentMessage, selectedModels, conversationId);
-      console.log('收到API响应:', response);
+      // 单个模型时使用流式响应
+      if (selectedModels.length === 1) {
+        // 创建临时AI消息用于流式显示
+        const tempAiMessage = {
+          role: 'assistant',
+          content: '',
+          model: selectedModels[0],
+          timestamp: new Date().toISOString()
+        };
 
-      if (!response || !response.responses) {
-        throw new Error('服务器返回的响应格式不正确');
-      }
-      
-      let aiMessages;
-      if (mergeResponses && response.responses.length > 1) {
-        try {
-          // 调用融合API
-          const fusionResult = await fusionResponses(response.responses, conversationId);
-          aiMessages = [{
-            role: 'assistant',
-            content: fusionResult.fusedContent,
-            model: 'fusion',
-            timestamp: new Date().toISOString()
-          }];
-        } catch (fusionError) {
-          console.error('融合回答失败:', fusionError);
-          // 如果融合失败，回退到分别显示每个模型的回答
+        // 先添加临时消息
+        setConversations(prevConversations => {
+          return prevConversations.map(conv => {
+            if (conv.id === conversationId) {
+              return {
+                ...conv,
+                messages: [...conv.messages, tempAiMessage]
+              };
+            }
+            return conv;
+          });
+        });
+
+        // 调用API发送消息（流式）
+        const response = await sendMessageToAPI(
+          currentMessage, 
+          selectedModels, 
+          conversationId,
+          (chunk) => {
+            setStreamingContent(prev => {
+              const newContent = prev + chunk;
+              // 更新临时消息内容
+              setConversations(prevConversations => {
+                return prevConversations.map(conv => {
+                  if (conv.id === conversationId) {
+                    const messages = [...conv.messages];
+                    const lastMessage = messages[messages.length - 1];
+                    if (lastMessage.role === 'assistant') {
+                      messages[messages.length - 1] = {
+                        ...lastMessage,
+                        content: newContent
+                      };
+                    }
+                    return {
+                      ...conv,
+                      messages: messages
+                    };
+                  }
+                  return conv;
+                });
+              });
+              return newContent;
+            });
+          }
+        );
+
+        // 流式结束后，确保最终内容正确
+        if (response && response.responses && response.responses[0]) {
+          setConversations(prevConversations => {
+            return prevConversations.map(conv => {
+              if (conv.id === conversationId) {
+                const messages = [...conv.messages];
+                const lastMessage = messages[messages.length - 1];
+                if (lastMessage.role === 'assistant') {
+                  messages[messages.length - 1] = {
+                    ...lastMessage,
+                    content: response.responses[0].content
+                  };
+                }
+                return {
+                  ...conv,
+                  messages: messages
+                };
+              }
+              return conv;
+            });
+          });
+        }
+      } 
+      // 多个模型时保持原样
+      else {
+        // 调用API发送消息（非流式）
+        const response = await sendMessageToAPI(currentMessage, selectedModels, conversationId);
+        console.log('收到API响应:', response);
+
+        if (!response || !response.responses) {
+          throw new Error('服务器返回的响应格式不正确');
+        }
+        
+        let aiMessages;
+        if (mergeResponses && response.responses.length > 1) {
+          try {
+            // 调用融合API
+            const fusionResult = await fusionResponses(response.responses, conversationId);
+            aiMessages = [{
+              role: 'assistant',
+              content: fusionResult.fusedContent,
+              model: 'fusion',
+              timestamp: new Date().toISOString()
+            }];
+          } catch (fusionError) {
+            console.error('融合回答失败:', fusionError);
+            // 如果融合失败，回退到分别显示每个模型的回答
+            aiMessages = response.responses.map(response => ({
+              role: 'assistant',
+              content: response.content,
+              model: response.modelId,
+              timestamp: new Date().toISOString()
+            }));
+          }
+        } else {
+          // 分别显示每个模型的回答
           aiMessages = response.responses.map(response => ({
             role: 'assistant',
             content: response.content,
@@ -210,31 +303,23 @@ const App = () => {
             timestamp: new Date().toISOString()
           }));
         }
-      } else {
-        // 分别显示每个模型的回答
-        aiMessages = response.responses.map(response => ({
-          role: 'assistant',
-          content: response.content,
-          model: response.modelId,
-          timestamp: new Date().toISOString()
-        }));
-      }
 
-      console.log('处理后的AI消息:', aiMessages);
+        console.log('处理后的AI消息:', aiMessages);
 
-      // 更新对话内容
-      setConversations(prevConversations => {
-        return prevConversations.map(conv => {
-          if (conv.id === conversationId) {
-            const updatedMessages = [...conv.messages, ...aiMessages];
-            return {
-              ...conv,
-              messages: updatedMessages
-            };
-          }
-          return conv;
+        // 更新对话内容
+        setConversations(prevConversations => {
+          return prevConversations.map(conv => {
+            if (conv.id === conversationId) {
+              const updatedMessages = [...conv.messages, ...aiMessages];
+              return {
+                ...conv,
+                messages: updatedMessages
+              };
+            }
+            return conv;
+          });
         });
-      });
+      }
     } catch (error) {
       console.error('发送消息时出错:', error);
       
@@ -679,4 +764,4 @@ const App = () => {
   );
 };
 
-export default App; 
+export default App;

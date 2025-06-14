@@ -61,25 +61,78 @@ export const updateModelSelection = async (modelIds) => {
 };
 
 // 发送消息并获取回答
-export const sendMessage = async (message, modelIds, conversationId) => {
+export const sendMessage = async (message, modelIds, conversationId, onStream) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        message,
-        modelIds,
-        conversationId,
-      }),
-    });
-    
-    if (!response.ok) {
-      throw new Error('Failed to send message');
+    // 单个模型时使用流式响应
+    if (modelIds.length === 1 && onStream) {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message,
+          modelIds,
+          conversationId,
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let result = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        // 解析SSE格式数据
+        const lines = chunk.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.substring(6).trim();
+            if (data === '[DONE]') continue;
+            
+            try {
+              const json = JSON.parse(data);
+              if (json.choices && json.choices[0].delta.content) {
+                const content = json.choices[0].delta.content;
+                result += content;
+                onStream(content);
+              }
+            } catch (e) {
+              console.log('Failed to parse SSE data:', e);
+            }
+          }
+        }
+      }
+      
+      return { responses: [{ modelId: modelIds[0], content: result }] };
+    } 
+    // 多个模型时保持原样
+    else {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message,
+          modelIds,
+          conversationId,
+        }),
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to send message');
+      }
+      
+      return await response.json();
     }
-    
-    return await response.json();
   } catch (error) {
     console.error('Error sending message:', error);
     throw error;
@@ -109,4 +162,4 @@ export const fusionResponses = async (responses, conversationId) => {
     console.error('Error fusion responses:', error);
     throw error;
   }
-}; 
+};
