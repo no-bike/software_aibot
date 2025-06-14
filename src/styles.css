@@ -35,4 +35,41 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #555;
-} 
+}
+
+/* 代码块样式 */
+.code-block {
+  position: relative;
+  background: #282c34;
+  color: #abb2bf;
+  padding: 1rem;
+  border-radius: 6px;
+  font-family: 'Courier New', monospace;
+  margin: 1rem 0;
+  overflow: auto;
+  border: 1px solid #61afef;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+}
+
+.code-block pre {
+  margin: 0;
+}
+
+.copy-btn {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  background: #61afef;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.copy-btn:hover {
+  opacity: 1;
+}

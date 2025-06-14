@@ -626,17 +626,17 @@ const App = () => {
                           </Typography>
                         ) : (
                           <Box sx={{ 
+                            '& .code-block': {
+                              margin: '1rem 0'
+                            },
                             '& pre': { 
-                              backgroundColor: 'rgba(0, 0, 0, 0.05)',
-                              padding: '1rem',
-                              borderRadius: '4px',
-                              overflowX: 'auto'
+                              backgroundColor: 'transparent',
+                              padding: 0,
+                              margin: 0
                             },
                             '& code': {
-                              backgroundColor: 'rgba(0, 0, 0, 0.05)',
-                              padding: '0.2rem 0.4rem',
-                              borderRadius: '3px',
-                              fontSize: '0.9em'
+                              backgroundColor: 'transparent',
+                              padding: 0
                             },
                             '& p': {
                               margin: '0.5rem 0'
@@ -670,14 +670,69 @@ const App = () => {
                               components={{
                                 code: ({node, inline, className, children, ...props}) => {
                                   const match = /language-(\w+)/.exec(className || '');
-                                  return !inline ? (
-                                    <pre>
-                                      <code className={match ? `language-${match[1]}` : ''} {...props}>
+                                  if (inline) {
+                                    return (
+                                      <code className={className} {...props}>
                                         {children}
                                       </code>
-                                    </pre>
-                                  ) : (
-                                    <code className={className} {...props}>
+                                    );
+                                  }
+                                  
+                                  // 检查是否为多行代码
+                                  const isMultiLine = String(children).includes('\n');
+                                  
+                                  if (isMultiLine) {
+                                    const handleCopy = () => {
+                                      navigator.clipboard.writeText(String(children));
+                                    };
+                                    
+                                    return (
+                                      <div className="code-block" style={{display: 'block'}}>
+                                        <button className="copy-btn" onClick={handleCopy}>
+                                          复制
+                                        </button>
+                                        <pre style={{margin: 0}}>
+                                          <code 
+                                            className={match ? `language-${match[1]}` : ''} 
+                                            style={{
+                                       backgroundColor: '#1a1a1a',  // 更深的黑色背景
+    color: '#4a9eff',           // 蓝色代码文字
+    padding: '12px 16px',       // 增大内边距，形成块状
+    borderRadius: '8px',        // 圆角
+    fontFamily: 'JetBrains Mono, Consolas, Monaco, monospace',
+    fontSize: '14px',
+    lineHeight: '1.6',
+    display: 'block',           // 块级显示
+    width: '100%',              // 占满宽度
+    boxSizing: 'border-box',
+    border: '1px solid #333',   // 添加边框
+    whiteSpace: 'pre-wrap',     // 保持换行和空格
+    wordBreak: 'break-word',    // 长单词换行
+    overflow: 'auto',           // 滚动条
+    margin: '8px 0' 
+                                            }}
+                                            {...props}
+                                          >
+                                            {children}
+                                          </code>
+                                        </pre>
+                                      </div>
+                                    );
+                                  }
+                                  
+                                  // 单行代码简单显示
+                                  return (
+                                    <code 
+                                      className={match ? `language-${match[1]}` : ''} 
+                                      style={{
+                                        backgroundColor: '#282c34',
+                                        color: '#abb2bf',
+                                        padding: '0.2em 0.4em',
+                                        borderRadius: '3px',
+                                        fontFamily: 'Courier New, monospace'
+                                      }}
+                                      {...props}
+                                    >
                                       {children}
                                     </code>
                                   );
