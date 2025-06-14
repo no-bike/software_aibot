@@ -84,6 +84,10 @@ export const sendMessage = async (message, modelIds, conversationId, onStream) =
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let result = '';
+      let hasContent = false;
+      
+      // 显示思考中提示
+      onStream("思考中...");
       
       while (true) {
         const { done, value } = await reader.read();
@@ -102,7 +106,13 @@ export const sendMessage = async (message, modelIds, conversationId, onStream) =
               if (json.choices && json.choices[0].delta.content) {
                 const content = json.choices[0].delta.content;
                 result += content;
-                onStream(content);
+                if (!hasContent && content.trim()) {
+                  hasContent = true;
+                  // 第一次收到有效内容时清空思考中提示
+                  onStream(content);
+                } else {
+                  onStream(content);
+                }
               }
             } catch (e) {
               console.log('Failed to parse SSE data:', e);
