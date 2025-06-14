@@ -18,7 +18,7 @@ import {
   Snackbar
 } from '@mui/material';
 import { Delete as DeleteIcon, Add as AddIcon } from '@mui/icons-material';
-import { addModel, getModels } from '../services/apiService';
+import { addModel, getModels, deleteModel } from '../services/apiService';
 
 const Settings = ({ onClose, onModelsUpdate }) => {
   const [models, setModels] = useState([]);
@@ -86,9 +86,13 @@ const Settings = ({ onClose, onModelsUpdate }) => {
   const handleDeleteModel = async (index) => {
     try {
       const modelToDelete = models[index];
-      // TODO: 添加删除模型的API调用
+      await deleteModel(modelToDelete.id);
       const updatedModels = models.filter((_, i) => i !== index);
       setModels(updatedModels);
+      // 通知父组件模型列表已更新
+      if (onModelsUpdate) {
+        onModelsUpdate(updatedModels);
+      }
     } catch (error) {
       setError('Failed to delete model');
     }
@@ -204,4 +208,4 @@ const Settings = ({ onClose, onModelsUpdate }) => {
   );
 };
 
-export default Settings; 
+export default Settings;
