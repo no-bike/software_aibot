@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import json
@@ -10,8 +10,8 @@ import os
 import asyncio
 import logging
 import traceback
-from services.deepseek_service import get_deepseek_response
-from services.sparkx1_service import get_sparkx1_response
+from services.deepseek_service import get_deepseek_response, get_deepseek_stream_response
+from services.sparkx1_service import get_sparkx1_response, get_sparkx1_stream_response
 from services.moonshot_service import get_moonshot_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 
@@ -238,14 +238,94 @@ async def chat(request: MessageRequest):
             conversation["messages"].append(user_message)
             logger.info(f"添加用户消息到会话: {user_message}")
         
-        # 获取AI响应
+        # 单个模型时使用流式响应
+        if len(request.modelIds) == 1:
+            model_id = request.modelIds[0]
+            try:
+                # 准备会话历史
+                history = []
+                if conversation:
+                    for msg in conversation["messages"][:-1]:  # 不包含刚刚添加的用户消息
+                        history.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                    logger.info(f"会话历史: {history}")
+                
+                logger.info(f"正在流式调用模型 {model_id} 的API")
+                
+                if model_id == "deepseek-chat":
+                    return StreamingResponse(
+                        get_deepseek_stream_response(request.message, history),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                elif model_id == "sparkx1":
+                    from services.sparkx1_service import get_sparkx1_stream_response
+                    return StreamingResponse(
+                        get_sparkx1_stream_response(request.message, history),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                else:
+                    # 其他模型暂时保持原样
+                    response_content = None
+                    if model_id == "moonshot":
+                        api_config = models.get(model_id)
+                        if not api_config:
+                            raise HTTPException(status_code=400, detail="Moonshot模型未配置")
+                        response_content = await get_moonshot_response(request.message, history, api_config)
+                    else:
+                        raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
+                    
+                    response = {
+                        "modelId": model_id,
+                        "content": response_content
+                    }
+                    
+                    if conversation:
+                        ai_message = {
+                            "content": response_content,
+                            "role": "assistant",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }
+                        conversation["messages"].append(ai_message)
+                    
+                    return JSONResponse(
+                        status_code=200,
+                        content={"responses": [response]},
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                    
+            except Exception as e:
+                error_msg = f"处理模型 {model_id} 的响应时发生错误: {str(e)}\n{traceback.format_exc()}"
+                logger.error(error_msg)
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": error_msg},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )
+        
+        # 多个模型时保持原有逻辑
         responses = []
         for model_id in request.modelIds:
             try:
                 # 准备会话历史
                 history = []
                 if conversation:
-                    for msg in conversation["messages"][:-1]:  # 不包含刚刚添加的用户消息
+                    for msg in conversation["messages"][:-1]:
                         history.append({
                             "role": msg["role"],
                             "content": msg["content"]
@@ -259,7 +339,6 @@ async def chat(request: MessageRequest):
                 elif model_id == "sparkx1":
                     response_content = await get_sparkx1_response(request.message, history)
                 elif model_id == "moonshot":
-                    # 获取moonshot的API配置
                     api_config = models.get(model_id)
                     if not api_config:
                         raise HTTPException(status_code=400, detail="Moonshot模型未配置")
@@ -275,7 +354,6 @@ async def chat(request: MessageRequest):
                 responses.append(response)
                 
                 if conversation:
-                    # 添加AI响应到会话
                     ai_message = {
                         "content": response_content,
                         "role": "assistant",

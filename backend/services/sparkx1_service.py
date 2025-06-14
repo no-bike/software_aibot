@@ -69,3 +69,63 @@ async def get_sparkx1_response(message: str, conversation_history: List[Dict] = 
             logger.error(f"处理SparkX1 API响应时发生错误: {str(e)}")
             raise HTTPException(status_code=500, 
                               detail=f"调用SparkX1 API时发生错误: {str(e)}")
+
+async def get_sparkx1_stream_response(message: str, conversation_history: List[Dict] = None):
+    """流式调用SparkX1 API获取响应"""
+    async with httpx.AsyncClient() as client:
+        api_token = os.environ.get("SPARKX1_API_TOKEN", "")
+        api_base = os.environ.get("SPARKX1_API_BASE", "")
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_token}"
+        }
+        
+        messages = []
+        if conversation_history:
+            messages.extend(conversation_history)
+        messages.append({"role": "user", "content": message})
+        
+        try:
+            logger.info(f"发送流式请求到SparkX1 API: {api_base}")
+            
+            payload = {
+                "max_tokens": 32768,
+                "top_k": 6,
+                "temperature": 1.2,
+                "messages": messages,
+                "model": "x1",
+                "tools": [
+                    {
+                        "web_search": {
+                            "search_mode": "normal",
+                            "enable": False
+                        },
+                        "type": "web_search"
+                    }
+                ],
+                "stream": True
+            }
+            
+            async with client.stream(
+                "POST",
+                api_base,
+                headers=headers,
+                json=payload,
+                timeout=30.0
+            ) as response:
+                logger.info(f"SparkX1 API流式响应状态码: {response.status_code}")
+                
+                if response.status_code != 200:
+                    error_text = await response.aread()
+                    logger.error(f"SparkX1 API流式错误响应: {error_text}")
+                    raise HTTPException(status_code=response.status_code, 
+                                      detail=f"SparkX1 API错误: {error_text}")
+                
+                async for chunk in response.aiter_text():
+                    yield chunk
+                    
+        except Exception as e:
+            logger.error(f"处理SparkX1 API流式响应时发生错误: {str(e)}")
+            raise HTTPException(status_code=500, 
+                              detail=f"调用SparkX1 API时发生错误: {str(e)}")
