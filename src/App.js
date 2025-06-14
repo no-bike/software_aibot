@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Box, 
   Container, 
@@ -52,6 +52,7 @@ const App = () => {
   const [mergeResponses, setMergeResponses] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const messagesEndRef = useRef(null);
 
   // 从API加载模型列表
   useEffect(() => {
@@ -377,6 +378,17 @@ const App = () => {
     return conversations.find(conv => conv.id === currentConversationId) || { messages: [] };
   };
 
+  // 当消息变化时自动滚动到底部
+  useEffect(() => {
+    const container = document.querySelector('.messages-container');
+    if (container) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [getCurrentConversation().messages]);
+
   const handleModelsUpdate = (updatedModels) => {
     setModels(updatedModels);
     // 如果当前没有选中的模型，选择第一个
@@ -593,7 +605,7 @@ const App = () => {
                   </Box>
                 )}
 
-                <Box sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
+                <Box className="messages-container" sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
                   {getCurrentConversation().messages.map((msg, index) => (
                     <Box
                       key={index}
