@@ -149,6 +149,27 @@ export const sendMessage = async (message, modelIds, conversationId, onStream) =
   }
 };
 
+// 删除模型
+export const deleteModel = async (modelId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/models/${modelId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to delete model');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting model:', error);
+    throw error;
+  }
+};
+
 // 融合多个模型的回答
 export const fusionResponses = async (responses, conversationId) => {
   try {
