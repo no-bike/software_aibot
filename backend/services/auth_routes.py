@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from motor.motor_asyncio import AsyncIOMotorClient
 from .auth_service import AuthService, User, Token
@@ -38,8 +38,24 @@ async def register(user: User):
     return await auth_service.register_user(user)
 
 @router.post("/token", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    return await auth_service.login(form_data.username, form_data.password)
+async def login(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
+    token = await auth_service.login(form_data.username, form_data.password)
+    
+    # 获取用户信息
+    user = await auth_service.get_user(form_data.username)
+    if user:
+        # 设置 user_id cookie，有效期与 token 相同
+        response.set_cookie(
+            key="user_id",
+            value=str(user.id),  # 确保 user.id 是字符串
+            httponly=True,
+            secure=False,  # 开发环境设为 False，生产环境应设为 True
+            samesite="lax",
+            max_age=30 * 60,  # 30 分钟，与 token 过期时间相同
+            path="/"  # 确保 cookie 在所有路径下可用
+        )
+    
+    return token
 
 @router.get("/users/me", response_model=User)
 async def read_users_me(current_user: User = Depends(get_current_user)):

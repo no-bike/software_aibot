@@ -9,6 +9,8 @@ class AuthService {
                 username,
                 email,
                 password
+            }, {
+                withCredentials: true
             });
             return response.data;
         } catch (error) {
@@ -25,7 +27,8 @@ class AuthService {
             const response = await axios.post(`${API_URL}/token`, formData, {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
-                }
+                },
+                withCredentials: true
             });
 
             if (response.data.access_token) {
@@ -55,7 +58,8 @@ class AuthService {
             const response = await axios.get(`${API_URL}/users/me`, {
                 headers: {
                     'Authorization': `Bearer ${user.access_token}`
-                }
+                },
+                withCredentials: true
             });
             return response.data;
         } catch (error) {

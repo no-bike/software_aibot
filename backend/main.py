@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
@@ -33,15 +33,13 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# 配置CORS - 添加更多允许的头部和方法
+# 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
 )
 
 # 添加认证路由
@@ -88,7 +86,7 @@ class MessageRequest(BaseModel):
     message: str
     modelIds: List[str]
     conversationId: Optional[str] = None
-    # userId: Optional[str] = "default_user"  # 暂时注释掉，统一使用默认用户
+    userId: Optional[str] = "default_user"
 
 class FusionRequest(BaseModel):
     responses: List[Dict[str, str]]
@@ -220,8 +218,13 @@ async def update_model_selection(model_ids: List[str]):
     return JSONResponse(content={"selected_models": selected_models})
 
 @app.post("/api/chat")
-async def chat(request: MessageRequest):
+async def chat(request: MessageRequest, req: Request):
     try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="未登录或会话已过期")
+            
         logger.info(f"收到聊天请求: {request.dict()}")
         
         if not request.modelIds:
@@ -244,29 +247,28 @@ async def chat(request: MessageRequest):
                     content={"detail": f"找不到模型ID {model_id}"},
                     headers={
                         "Access-Control-Allow-Origin": "http://localhost:3000",
-                        "Access-Control-Allow-Credentials": "true"                    }
+                        "Access-Control-Allow-Credentials": "true"
+                    }
                 )
         
         # 获取或创建会话
         conversation = None
-        default_user_id = "default_user"  # 所有用户统一使用这个ID
-        
         if request.conversationId:
-            # 从 MongoDB 获取会话
             conversation = await mongodb_service.get_user_conversation_with_messages(
-                default_user_id, request.conversationId
+                user_id, request.conversationId
             )
             if not conversation:
-                logger.info(f"创建新会话: {request.conversationId} for default user")
+                logger.info(f"创建新会话: {request.conversationId} for user {user_id}")
                 conversation = {
                     "id": request.conversationId,
                     "title": f"对话 {request.conversationId[:8]}",
                     "messages": [],
                     "models": request.modelIds,
-                    "createdAt": get_beijing_time().isoformat()
+                    "createdAt": get_beijing_time().isoformat(),
+                    "userId": user_id  # 使用从 cookie 获取的用户 ID
                 }
                 # 保存到 MongoDB
-                await mongodb_service.save_conversation(conversation, default_user_id)
+                await mongodb_service.save_conversation(conversation, user_id)
             logger.info(f"当前会话信息: 消息数量={len(conversation.get('messages', []))}")
           # 添加用户消息
         user_message = {
@@ -277,7 +279,7 @@ async def chat(request: MessageRequest):
         
         # 保存用户消息到 MongoDB
         if conversation:
-            await mongodb_service.save_message(request.conversationId, user_message, default_user_id)
+            await mongodb_service.save_message(request.conversationId, user_message, user_id)
             conversation["messages"].append(user_message)
             logger.info(f"添加用户消息到会话: {user_message}")
         
@@ -290,7 +292,7 @@ async def chat(request: MessageRequest):
                 if conversation:
                     # 从 MongoDB 获取会话历史，限制最近 6 条消息
                     recent_messages = await mongodb_service.get_conversation_history(
-                        request.conversationId, limit=6
+                        request.conversationId, user_id, limit=6
                     )
                     
                     # 排除刚刚添加的用户消息
@@ -341,7 +343,7 @@ async def chat(request: MessageRequest):
                                 "timestamp": get_beijing_time().isoformat()
                             }
                             try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
                                 logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
                             except Exception as e:
                                 logger.error(f"保存AI响应失败: {e}")
@@ -393,7 +395,7 @@ async def chat(request: MessageRequest):
                                 "timestamp": get_beijing_time().isoformat()
                             }
                             try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
                                 logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
                             except Exception as e:
                                 logger.error(f"保存AI响应失败: {e}")
@@ -448,7 +450,7 @@ async def chat(request: MessageRequest):
                                 "timestamp": get_beijing_time().isoformat()
                             }
                             try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
                                 logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
                             except Exception as e:
                                 logger.error(f"保存AI响应失败: {e}")
@@ -487,7 +489,7 @@ async def chat(request: MessageRequest):
                         }
                         conversation["messages"].append(ai_message)
                         # 保存AI响应到 MongoDB
-                        await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
+                        await mongodb_service.save_message(request.conversationId, ai_message, user_id)
                         logger.info(f"AI响应已保存到MongoDB: {model_id}")
                     
                     return JSONResponse(
@@ -518,7 +520,7 @@ async def chat(request: MessageRequest):
                 if conversation:
                     # 从 MongoDB 获取会话历史，限制最近 6 条消息
                     recent_messages = await mongodb_service.get_conversation_history(
-                        request.conversationId, limit=6
+                        request.conversationId, user_id, limit=6
                     )
                     
                     # 排除刚刚添加的用户消息
@@ -559,7 +561,7 @@ async def chat(request: MessageRequest):
                         "model": model_id,
                         "timestamp": get_beijing_time().isoformat()
                     }
-                    await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
+                    await mongodb_service.save_message(request.conversationId, ai_message, user_id)
                     logger.info(f"AI响应已保存到MongoDB: {model_id}")
                     
             except Exception as e:
@@ -599,7 +601,7 @@ async def chat(request: MessageRequest):
         )
 
 @app.post("/api/fusion")
-async def fusion_response(request: FusionRequest):
+async def fusion_response(request: FusionRequest, req: Request):
     try:
         logger.info(f"收到融合请求: {request.dict()}")
         
@@ -612,14 +614,16 @@ async def fusion_response(request: FusionRequest):
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
-          # 获取会话历史（如果有）
-        history = []
-        default_user_id = "default_user"  # 所有用户统一使用这个ID
         
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id", "default_user")
+        
+        # 获取会话历史（如果有）
+        history = []
         if request.conversationId:
             # 从 MongoDB 获取会话历史
             recent_messages = await mongodb_service.get_conversation_history(
-                request.conversationId, limit=6
+                request.conversationId, user_id, limit=6
             )
             # 排除刚刚添加的用户消息
             for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
@@ -642,7 +646,7 @@ async def fusion_response(request: FusionRequest):
                 "timestamp": get_beijing_time().isoformat()
             }
             # 保存融合回答到 MongoDB
-            await mongodb_service.save_message(request.conversationId, fusion_message, default_user_id)
+            await mongodb_service.save_message(request.conversationId, fusion_message, user_id)
             logger.info(f"融合回答已保存到MongoDB: {fusion_message}")
         
         return JSONResponse(
@@ -667,7 +671,7 @@ async def fusion_response(request: FusionRequest):
         )
 
 @app.post("/api/fusion/advanced")
-async def advanced_fusion_response(request: AdvancedFusionRequest):
+async def advanced_fusion_response(request: AdvancedFusionRequest, req: Request):
     """
     高级融合接口 - 使用 LLM-Blender 进行智能融合
     
@@ -688,6 +692,9 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
+        
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id", "default_user")
         
         # 转换响应格式以匹配服务接口
         formatted_responses = []
@@ -710,9 +717,9 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
         # 计算处理时间
         processing_time = (end_time - start_time).total_seconds()
         result["processing_time"] = processing_time
-          # 如果存在会话ID，将融合结果保存到 MongoDB
+        
+        # 如果存在会话ID，将融合结果保存到 MongoDB
         if request.conversationId:
-            default_user_id = "default_user"  # 所有用户统一使用这个ID
             fusion_message = {
                 "content": result["fused_content"],
                 "role": "assistant",
@@ -722,7 +729,7 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
                 "timestamp": end_time.isoformat()
             }
             # 保存高级融合回答到 MongoDB
-            await mongodb_service.save_message(request.conversationId, fusion_message, default_user_id)
+            await mongodb_service.save_message(request.conversationId, fusion_message, user_id)
             logger.info(f"高级融合回答已保存到MongoDB: {fusion_message}")
         
         logger.info(f"✅ 高级融合完成，方法: {result.get('fusion_method')}, 耗时: {processing_time:.2f}s")
@@ -868,10 +875,11 @@ async def delete_model(model_id: str):
 
 # 获取所有会话列表
 @app.get("/api/conversations")
-async def get_conversations():
+async def get_conversations(request: Request):
     try:
-        default_user_id = "default_user"  # 所有用户统一使用这个ID
-        conversations = await mongodb_service.get_all_conversations(default_user_id)
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        conversations = await mongodb_service.get_all_conversations(user_id)
         return JSONResponse(
             content={"conversations": conversations},
             headers={
@@ -892,10 +900,11 @@ async def get_conversations():
 
 # 删除会话
 @app.delete("/api/conversations/{conversation_id}")
-async def delete_conversation_endpoint(conversation_id: str):
+async def delete_conversation(conversation_id: str, request: Request):
     try:
-        default_user_id = "default_user"  # 所有用户统一使用这个ID
-        success = await mongodb_service.delete_conversation(conversation_id, default_user_id)
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        success = await mongodb_service.delete_user_conversation(user_id, conversation_id)
         if success:
             return JSONResponse(
                 content={"message": "会话删除成功"},
@@ -907,7 +916,7 @@ async def delete_conversation_endpoint(conversation_id: str):
         else:
             return JSONResponse(
                 status_code=404,
-                content={"detail": "会话不存在"},
+                content={"detail": "会话不存在或无权访问"},
                 headers={
                     "Access-Control-Allow-Origin": "http://localhost:3000",
                     "Access-Control-Allow-Credentials": "true"
@@ -926,11 +935,12 @@ async def delete_conversation_endpoint(conversation_id: str):
 
 # 更新会话标题
 @app.put("/api/conversations/{conversation_id}/title")
-async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest):
+async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest, req: Request):
     try:
-        default_user_id = "default_user"  # 所有用户统一使用这个ID
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id", "default_user")
         success = await mongodb_service.update_conversation_title(
-            conversation_id, request.title, default_user_id
+            conversation_id, request.title, user_id
         )
         if success:
             return JSONResponse(
@@ -962,10 +972,11 @@ async def update_conversation_title(conversation_id: str, request: UpdateTitleRe
 
 # 获取单个会话详情
 @app.get("/api/conversations/{conversation_id}")
-async def get_conversation_detail(conversation_id: str):
+async def get_conversation_detail(conversation_id: str, request: Request):
     try:
-        default_user_id = "default_user"  # 所有用户统一使用这个ID
-        conversation = await mongodb_service.get_conversation(conversation_id, default_user_id)
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        conversation = await mongodb_service.get_conversation(conversation_id, user_id)
         if conversation:
             return JSONResponse(
                 content={"conversation": conversation},
@@ -977,7 +988,7 @@ async def get_conversation_detail(conversation_id: str):
         else:
             return JSONResponse(
                 status_code=404,
-                content={"detail": "会话不存在"},
+                content={"detail": "会话不存在或无权访问"},
                 headers={
                     "Access-Control-Allow-Origin": "http://localhost:3000",
                     "Access-Control-Allow-Credentials": "true"

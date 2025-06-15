@@ -71,22 +71,25 @@ class MongoDBService:
             if not conversation_id:
                 logger.error("Missing conversation_id")
                 return False
-              # 准备会话数据
+            
+            # 准备会话数据
             conv_doc = {
                 "conversation_id": conversation_id,
-                "user_id": user_id,  # 添加用户ID
+                "user_id": user_id,  # 使用传入的用户ID
                 "title": conversation_data.get("title", ""),
                 "models": conversation_data.get("models", []),
                 "created_at": conversation_data.get("createdAt", get_beijing_time().isoformat()),
                 "updated_at": get_beijing_time().isoformat(),
-                "message_count": len(conversation_data.get("messages", []))
+                "message_count": len(conversation_data.get("messages", [])),
+                "userId": user_id  # 添加用户ID字段
             }
             
             # 使用 upsert 更新或插入会话
             result = await self.db.conversations.update_one(
                 {"conversation_id": conversation_id, "user_id": user_id},
                 {"$set": conv_doc},
-                upsert=True            )
+                upsert=True
+            )
             
             logger.info(f"Conversation saved: {conversation_id} for user: {user_id}")
             return True
@@ -97,9 +100,11 @@ class MongoDBService:
     
     async def save_message(self, conversation_id: str, message_data: Dict, user_id: str = "default_user") -> bool:
         """保存消息"""
-        try:            # 准备消息数据
+        try:
+            # 准备消息数据
             msg_doc = {
                 "conversation_id": conversation_id,
+                "user_id": user_id,  # 添加用户ID
                 "role": message_data.get("role"),
                 "content": message_data.get("content"),
                 "model": message_data.get("model", ""),
@@ -109,7 +114,8 @@ class MongoDBService:
             
             # 插入消息
             result = await self.db.messages.insert_one(msg_doc)
-              # 更新会话的最后更新时间和消息数量（只更新属于该用户的会话）
+            
+            # 更新会话的最后更新时间和消息数量（只更新属于该用户的会话）
             await self.db.conversations.update_one(
                 {"conversation_id": conversation_id, "user_id": user_id},
                 {
@@ -135,9 +141,12 @@ class MongoDBService:
             if not conversation:
                 return None
             
-            # 获取会话消息
+            # 获取会话消息（确保只获取该用户的消息）
             messages_cursor = self.db.messages.find(
-                {"conversation_id": conversation_id}
+                {
+                    "conversation_id": conversation_id,
+                    "user_id": user_id  # 添加用户ID过滤
+                }
             ).sort("timestamp", 1)
             
             messages = []
@@ -146,14 +155,17 @@ class MongoDBService:
                     "role": msg.get("role"),
                     "content": msg.get("content"),
                     "model": msg.get("model", ""),
-                    "timestamp": msg.get("timestamp")                })            # 构建返回数据
+                    "timestamp": msg.get("timestamp")
+                })
+            
+            # 构建返回数据
             result = {
                 "id": conversation["conversation_id"],
                 "title": conversation.get("title", ""),
                 "models": conversation.get("models", []),
                 "createdAt": conversation.get("created_at"),
                 "messages": messages,
-                "userId": conversation.get("user_id", "default_user")
+                "userId": conversation.get("user_id", user_id)
             }
             
             return result
@@ -188,8 +200,11 @@ class MongoDBService:
     async def delete_conversation(self, conversation_id: str, user_id: str = "default_user") -> bool:
         """删除指定用户的会话和相关消息"""
         try:
-            # 删除消息
-            await self.db.messages.delete_many({"conversation_id": conversation_id})
+            # 删除消息（确保只删除该用户的消息）
+            await self.db.messages.delete_many({
+                "conversation_id": conversation_id,
+                "user_id": user_id  # 添加用户ID过滤
+            })
             
             # 删除会话（确保是该用户的会话）
             result = await self.db.conversations.delete_one(
@@ -230,12 +245,22 @@ class MongoDBService:
             logger.error(f"Failed to update conversation title: {str(e)}")
             return False
     
-    async def get_conversation_history(self, conversation_id: str, limit: int = 20) -> List[Dict]:
+    async def get_conversation_history(self, conversation_id: str, user_id: str, limit: int = 20) -> List[Dict]:
         """获取会话历史消息（用于AI上下文）"""
         try:
+            # 首先验证会话是否属于该用户
+            conversation = await self.db.conversations.find_one(
+                {"conversation_id": conversation_id, "user_id": user_id}
+            )
+            if not conversation:
+                return []
+                
             messages = []
             cursor = self.db.messages.find(
-                {"conversation_id": conversation_id}
+                {
+                    "conversation_id": conversation_id,
+                    "user_id": user_id  # 添加用户ID过滤
+                }
             ).sort("timestamp", -1).limit(limit)
             
             async for msg in cursor:
@@ -253,7 +278,47 @@ class MongoDBService:
     
     async def get_user_conversation_with_messages(self, user_id: str, conversation_id: str) -> Optional[Dict]:
         """获取用户的会话及其消息"""
-        return await self.get_conversation(conversation_id, user_id)
+        try:
+            # 获取会话基本信息（验证用户ID）
+            conversation = await self.db.conversations.find_one(
+                {"conversation_id": conversation_id, "user_id": user_id}
+            )
+            
+            if not conversation:
+                return None
+            
+            # 获取会话消息（确保只获取该用户的消息）
+            messages_cursor = self.db.messages.find(
+                {
+                    "conversation_id": conversation_id,
+                    "user_id": user_id  # 添加用户ID过滤
+                }
+            ).sort("timestamp", 1)
+            
+            messages = []
+            async for msg in messages_cursor:
+                messages.append({
+                    "role": msg.get("role"),
+                    "content": msg.get("content"),
+                    "model": msg.get("model", ""),
+                    "timestamp": msg.get("timestamp")
+                })
+            
+            # 构建返回数据
+            result = {
+                "id": conversation["conversation_id"],
+                "title": conversation.get("title", ""),
+                "models": conversation.get("models", []),
+                "createdAt": conversation.get("created_at"),
+                "messages": messages,
+                "userId": user_id
+            }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to get user conversation: {str(e)}")
+            return None
     
     async def get_user_conversations(self, user_id: str) -> List[Dict]:
         """获取用户的所有会话"""

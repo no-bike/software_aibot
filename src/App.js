@@ -502,12 +502,6 @@ const MainApp = () => {
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               AI 助手
             </Typography>
-            <IconButton color="inherit" onClick={() => setIsDarkMode(!isDarkMode)}>
-              {isDarkMode ? <LightModeIcon /> : <DarkModeIcon />}
-            </IconButton>
-            <IconButton color="inherit" onClick={() => setShowSettings(true)}>
-              <SettingsIcon />
-            </IconButton>
             <IconButton color="inherit" onClick={logout}>
               <LogoutIcon />
             </IconButton>

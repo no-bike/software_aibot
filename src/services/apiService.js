@@ -9,6 +9,7 @@ export const addModel = async (model) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(model),
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -25,7 +26,9 @@ export const addModel = async (model) => {
 // 获取所有模型
 export const getModels = async () => {
   try {
-    const response = await fetch(`${API_BASE_URL}/models`);
+    const response = await fetch(`${API_BASE_URL}/models`, {
+      credentials: 'include'
+    });
     
     if (!response.ok) {
       throw new Error('Failed to fetch models');
@@ -47,6 +50,7 @@ export const updateModelSelection = async (modelIds) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(modelIds),
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -75,6 +79,7 @@ export const sendMessage = async (message, modelIds, conversationId, onStream) =
           modelIds,
           conversationId,
         }),
+        credentials: 'include'
       });
       
       if (!response.ok) {
@@ -135,6 +140,7 @@ export const sendMessage = async (message, modelIds, conversationId, onStream) =
           modelIds,
           conversationId,
         }),
+        credentials: 'include'
       });
       
       if (!response.ok) {
@@ -157,6 +163,7 @@ export const deleteModel = async (modelId) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -182,6 +189,7 @@ export const fusionResponses = async (responses, conversationId) => {
         responses,
         conversationId,
       }),
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -203,6 +211,7 @@ export const getConversations = async () => {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -225,6 +234,7 @@ export const getConversationDetail = async (conversationId) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -248,6 +258,7 @@ export const updateConversationTitle = async (conversationId, title) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ title }),
+      credentials: 'include'
     });
     
     if (!response.ok) {
@@ -269,6 +280,7 @@ export const deleteConversation = async (conversationId) => {
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include'
     });
     
     if (!response.ok) {
