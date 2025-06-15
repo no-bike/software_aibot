@@ -42,7 +42,7 @@ import LightModeIcon from '@mui/icons-material/LightMode';
 import Settings from './components/Settings';
 import darkTheme from './theme/darkTheme';
 import lightTheme from './theme/lightTheme';
-import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses } from './services/apiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation, getConversationDetail } from './services/apiService';
 
 const App = () => {
   const [message, setMessage] = useState('');
@@ -99,6 +99,22 @@ const App = () => {
     updateSelection();
   }, [selectedModels]);
 
+  // 加载会话历史
+  useEffect(() => {
+    const loadConversations = async () => {
+      try {
+        const savedConversations = await getConversations();
+        console.log('Loaded conversations from server:', savedConversations);
+        setConversations(savedConversations);
+      } catch (error) {
+        console.error('Error loading conversations:', error);
+        // 如果加载失败，保持空数组，不影响新会话的创建
+      }
+    };
+
+    loadConversations();
+  }, []);
+
   // 使用 useMemo 优化搜索性能
   const filteredConversations = useMemo(() => {
     if (!searchQuery.trim()) return conversations;
@@ -119,6 +135,42 @@ const App = () => {
     };
     setConversations(prevConversations => [newConversation, ...prevConversations]);
     return newConversation.id;  // 返回新创建的对话ID
+  };
+  // 选择并加载会话详情
+  const selectConversation = async (conversationId) => {
+    try {
+      console.log('Selecting conversation:', conversationId);
+      
+      // 先设置当前会话ID，避免在加载过程中UI显示异常
+      setCurrentConversationId(conversationId);
+      
+      const conversationDetail = await getConversationDetail(conversationId);
+      console.log('Loaded conversation detail:', conversationDetail);
+      
+      if (!conversationDetail) {
+        console.warn('No conversation detail received');
+        return;
+      }
+      
+      // 更新conversations状态，将加载的消息合并到对应的会话中
+      setConversations(prevConversations => {
+        return prevConversations.map(conv => {
+          if (conv.id === conversationId) {
+            return {
+              ...conv,
+              messages: conversationDetail.messages || [],
+              title: conversationDetail.title || conv.title,
+              models: conversationDetail.models || conv.models
+            };
+          }
+          return conv;
+        });
+      });
+    } catch (error) {
+      console.error('Error loading conversation detail:', error);
+      // 如果加载失败，仍然设置当前会话ID，允许用户继续对话
+      setCurrentConversationId(conversationId);
+    }
   };
 
   const [streamingContent, setStreamingContent] = useState('');
@@ -383,7 +435,6 @@ const App = () => {
   const getCurrentConversation = () => {
     return conversations.find(conv => conv.id === currentConversationId) || { messages: [] };
   };
-
   // 当消息变化时自动滚动到底部
   useEffect(() => {
     const container = document.querySelector('.messages-container');
@@ -393,7 +444,7 @@ const App = () => {
         behavior: 'smooth'
       });
     }
-  }, [getCurrentConversation().messages]);
+  }, [currentConversationId, conversations]);
 
   const handleModelsUpdate = (updatedModels) => {
     setModels(updatedModels);
@@ -510,7 +561,7 @@ const App = () => {
                       <ListItem
                         button
                         selected={currentConversationId === conv.id}
-                        onClick={() => setCurrentConversationId(conv.id)}
+                        onClick={() => selectConversation(conv.id)}
                         secondaryAction={
                           <Box>
                             <Tooltip title="Edit Title">
@@ -625,18 +676,24 @@ const App = () => {
                       }
                     />
                   </Box>
-                )}
-
-                <Box className="messages-container" sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
-                  {getCurrentConversation().messages.map((msg, index) => (
-                    <Box
-                      key={index}
-                      sx={{
-                        display: 'flex',
-                        justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                        mb: 2
-                      }}
-                    >                      <Paper
+                )}                <Box className="messages-container" sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
+                  {getCurrentConversation().messages && getCurrentConversation().messages.length > 0 ? (
+                    getCurrentConversation().messages.map((msg, index) => {
+                      // 安全检查：确保消息对象存在且有必要的属性
+                      if (!msg || typeof msg !== 'object') {
+                        console.warn('Invalid message object at index:', index, msg);
+                        return null;
+                      }
+                      
+                      return (
+                        <Box
+                          key={`${currentConversationId}-${index}`}
+                          sx={{
+                            display: 'flex',
+                            justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                            mb: 2
+                          }}
+                        ><Paper
                         className={
                           msg.role === 'user' 
                             ? 'user-message' 
@@ -799,13 +856,18 @@ const App = () => {
                                 ? '错误'
                                 : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
                           </Typography>
-                        )}
-                        <Typography variant="caption" color="text.secondary">
-                          {new Date(msg.timestamp).toLocaleTimeString()}
+                        )}                        <Typography variant="caption" color="text.secondary">
+                          {msg.timestamp && new Date(msg.timestamp).toLocaleTimeString()}
                         </Typography>
                       </Paper>
                     </Box>
-                  ))}
+                      );
+                    }).filter(Boolean) // 过滤掉null值
+                  ) : (
+                    <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                      暂无消息记录
+                    </Typography>
+                  )}
                 </Box>
 
                 <Box sx={{ display: 'flex', gap: 1 }}>

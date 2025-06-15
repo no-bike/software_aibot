@@ -194,3 +194,68 @@ export const fusionResponses = async (responses, conversationId) => {
     throw error;
   }
 };
+
+// 获取所有会话历史
+export const getConversations = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/conversations`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch conversations');
+    }
+    
+    const data = await response.json();
+    return data.conversations || [];
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    throw error;
+  }
+};
+
+// 获取单个会话详情
+export const getConversationDetail = async (conversationId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch conversation detail');
+    }
+    
+    const data = await response.json();
+    return data.conversation;
+  } catch (error) {
+    console.error('Error fetching conversation detail:', error);
+    throw error;
+  }
+};
+
+// 删除会话
+export const deleteConversation = async (conversationId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to delete conversation');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting conversation:', error);
+    throw error;
+  }
+};
