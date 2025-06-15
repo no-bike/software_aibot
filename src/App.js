@@ -23,7 +23,9 @@ import {
   InputAdornment,
   Chip,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  ThemeProvider,
+  CssBaseline
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -35,7 +37,11 @@ import EditIcon from '@mui/icons-material/Edit';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import SettingsIcon from '@mui/icons-material/Settings';
+import DarkModeIcon from '@mui/icons-material/DarkMode';
+import LightModeIcon from '@mui/icons-material/LightMode';
 import Settings from './components/Settings';
+import darkTheme from './theme/darkTheme';
+import lightTheme from './theme/lightTheme';
 import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses } from './services/apiService';
 
 const App = () => {
@@ -48,10 +54,10 @@ const App = () => {
   const [editTitle, setEditTitle] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [models, setModels] = useState([]);
-  const [mergeResponses, setMergeResponses] = useState(false);
+  const [models, setModels] = useState([]);  const [mergeResponses, setMergeResponses] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const messagesEndRef = useRef(null);
 
   // 从API加载模型列表
@@ -395,10 +401,10 @@ const App = () => {
     if (selectedModels.length === 0 && updatedModels.length > 0) {
       setSelectedModels([updatedModels[0].id]);
     }
-  };
-
-  return (
-    <Container maxWidth="lg" sx={{ height: '100vh', py: 2 }}>
+  };  return (
+    <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
+      <CssBaseline />
+      <Container maxWidth="lg" sx={{ height: '100vh', py: 2 }}>
       {showSettings ? (
         <Settings 
           onClose={() => setShowSettings(false)} 
@@ -555,17 +561,33 @@ const App = () => {
                 </List>
               </>
             )}
-            
-            {/* 设置按钮放在左下角 */}
+              {/* 设置和主题切换按钮放在左下角 */}
             <Box sx={{ mt: 'auto', pt: 2, borderTop: 1, borderColor: 'divider' }}>
-              <Button
-                fullWidth
-                variant="outlined"
-                startIcon={<SettingsIcon />}
-                onClick={() => setShowSettings(true)}
-              >
-                设置
-              </Button>
+              <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  startIcon={<SettingsIcon />}
+                  onClick={() => setShowSettings(true)}
+                >
+                  设置
+                </Button>
+                <Tooltip title={isDarkMode ? '切换到亮色主题' : '切换到深色主题'}>
+                  <IconButton
+                    onClick={() => setIsDarkMode(!isDarkMode)}
+                    color="primary"
+                    sx={{ 
+                      border: 1, 
+                      borderColor: 'divider',
+                      '&:hover': {
+                        borderColor: 'primary.main'
+                      }
+                    }}
+                  >
+                    {isDarkMode ? <LightModeIcon /> : <DarkModeIcon />}
+                  </IconButton>
+                </Tooltip>
+              </Box>
             </Box>
           </Paper>
 
@@ -614,16 +636,22 @@ const App = () => {
                         justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
                         mb: 2
                       }}
-                    >
-                      <Paper
+                    >                      <Paper
+                        className={
+                          msg.role === 'user' 
+                            ? 'user-message' 
+                            : msg.model === 'error'
+                              ? 'error-message'
+                              : 'assistant-message'
+                        }
                         sx={{
                           p: 2,
                           maxWidth: '70%',
                           backgroundColor: msg.role === 'user' 
-                            ? 'primary.light' 
+                            ? 'transparent' 
                             : msg.model === 'error'
-                              ? 'error.light'
-                              : 'grey.100'
+                              ? 'transparent'
+                              : 'transparent'
                         }}
                       >
                         {msg.role === 'user' ? (
@@ -703,25 +731,25 @@ const App = () => {
                                         <button className="copy-btn" onClick={handleCopy}>
                                           复制
                                         </button>
-                                        <pre style={{margin: 0}}>
-                                          <code 
+                                        <pre style={{margin: 0}}>                                          <code 
                                             className={match ? `language-${match[1]}` : ''} 
                                             style={{
-                                       backgroundColor: '#1a1a1a',  // 更深的黑色背景
-    color: '#4a9eff',           // 蓝色代码文字
-    padding: '12px 16px',       // 增大内边距，形成块状
-    borderRadius: '8px',        // 圆角
-    fontFamily: 'JetBrains Mono, Consolas, Monaco, monospace',
-    fontSize: '14px',
-    lineHeight: '1.6',
-    display: 'block',           // 块级显示
-    width: '100%',              // 占满宽度
-    boxSizing: 'border-box',
-    border: '1px solid #333',   // 添加边框
-    whiteSpace: 'pre-wrap',     // 保持换行和空格
-    wordBreak: 'break-word',    // 长单词换行
-    overflow: 'auto',           // 滚动条
-    margin: '8px 0' 
+                                              backgroundColor: '#0d1117',
+                                              color: '#4a9eff',
+                                              padding: '16px 20px',
+                                              borderRadius: '12px',
+                                              fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
+                                              fontSize: '14px',
+                                              lineHeight: '1.8',
+                                              display: 'block',
+                                              width: '100%',
+                                              boxSizing: 'border-box',
+                                              border: '1px solid #30363d',
+                                              whiteSpace: 'pre-wrap',
+                                              wordBreak: 'break-word',
+                                              overflow: 'auto',
+                                              margin: '12px 0',
+                                              boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
                                             }}
                                             {...props}
                                           >
@@ -733,15 +761,15 @@ const App = () => {
                                   }
                                   
                                   // 单行代码简单显示
-                                  return (
-                                    <code 
+                                  return (                                    <code 
                                       className={match ? `language-${match[1]}` : ''} 
                                       style={{
-                                        backgroundColor: '#282c34',
-                                        color: '#abb2bf',
-                                        padding: '0.2em 0.4em',
-                                        borderRadius: '3px',
-                                        fontFamily: 'Courier New, monospace'
+                                        backgroundColor: 'rgba(116, 199, 236, 0.2)',
+                                        color: '#74c7ec',
+                                        padding: '2px 6px',
+                                        borderRadius: '4px',
+                                        fontFamily: 'JetBrains Mono, Consolas, monospace',
+                                        fontSize: '0.9em'
                                       }}
                                       {...props}
                                     >
@@ -824,10 +852,10 @@ const App = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditingConversation(null)}>Cancel</Button>
-          <Button onClick={saveEditTitle} variant="contained">Save</Button>
-        </DialogActions>
+          <Button onClick={saveEditTitle} variant="contained">Save</Button>        </DialogActions>
       </Dialog>
     </Container>
+    </ThemeProvider>
   );
 };
 
