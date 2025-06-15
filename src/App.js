@@ -25,7 +25,9 @@ import {
   Switch,
   FormControlLabel,
   ThemeProvider,
-  CssBaseline
+  CssBaseline,
+  AppBar,
+  Toolbar
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -39,12 +41,18 @@ import ClearIcon from '@mui/icons-material/Clear';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
+import LogoutIcon from '@mui/icons-material/Logout';
 import Settings from './components/Settings';
+import Login from './components/Login';
+import Register from './components/Register';
 import darkTheme from './theme/darkTheme';
 import lightTheme from './theme/lightTheme';
 import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation as deleteConversationAPI, getConversationDetail, updateConversationTitle } from './services/apiService';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 
-const App = () => {
+// 将主应用内容包装在一个新组件中
+const MainApp = () => {
+  const { user, logout } = useAuth();
   const [message, setMessage] = useState('');
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
@@ -54,7 +62,8 @@ const App = () => {
   const [editTitle, setEditTitle] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [showSettings, setShowSettings] = useState(false);
-  const [models, setModels] = useState([]);  const [mergeResponses, setMergeResponses] = useState(false);
+  const [models, setModels] = useState([]);
+  const [mergeResponses, setMergeResponses] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -487,470 +496,526 @@ const App = () => {
   };  return (
     <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
       <CssBaseline />
-      <Container maxWidth="lg" sx={{ height: '100vh', py: 2 }}>
-      {showSettings ? (
-        <Settings 
-          onClose={() => setShowSettings(false)} 
-          onModelsUpdate={handleModelsUpdate}
-        />
-      ) : (
-        <Box sx={{ display: 'flex', height: '100%', gap: 2 }}>
-          {/* Sidebar */}
-          <Paper sx={{ width: 250, p: 2, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Button
-                variant="outlined"
-                startIcon={<HistoryIcon />}
-                onClick={() => setShowHistory(!showHistory)}
-              >
-                {showHistory ? 'Hide History' : 'Show History'}
-              </Button>
-              <Tooltip title="New Conversation">
-                <IconButton onClick={createNewConversation} color="primary">
-                  <AddIcon />
-                </IconButton>
-              </Tooltip>
-            </Box>
+      <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+        <AppBar position="static">
+          <Toolbar>
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+              AI 助手
+            </Typography>
+            <IconButton color="inherit" onClick={() => setIsDarkMode(!isDarkMode)}>
+              {isDarkMode ? <LightModeIcon /> : <DarkModeIcon />}
+            </IconButton>
+            <IconButton color="inherit" onClick={() => setShowSettings(true)}>
+              <SettingsIcon />
+            </IconButton>
+            <IconButton color="inherit" onClick={logout}>
+              <LogoutIcon />
+            </IconButton>
+          </Toolbar>
+        </AppBar>
 
-            <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>Models</InputLabel>
-              <Select
-                multiple
-                value={selectedModels}
-                label="Models"
-                onChange={(e) => setSelectedModels(e.target.value)}
-                renderValue={(selected) => (
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                    {selected.map((value) => (
-                      <Chip 
-                        key={value} 
-                        label={models.find(m => m.id === value)?.name || value}
-                        size="small"
-                      />
-                    ))}
-                  </Box>
-                )}
-                disabled={loading}
-              >
-                {loading ? (
-                  <MenuItem disabled>
-                    <Typography variant="body2" color="text.secondary">
-                      Loading models...
-                    </Typography>
-                  </MenuItem>
-                ) : error ? (
-                  <MenuItem disabled>
-                    <Typography variant="body2" color="error">
-                      {error}
-                    </Typography>
-                  </MenuItem>
-                ) : models.length === 0 ? (
-                  <MenuItem disabled>
-                    <Typography variant="body2" color="text.secondary">
-                      No models available
-                    </Typography>
-                  </MenuItem>
-                ) : (
-                  models.map((model) => (
-                    <MenuItem key={model.id} value={model.id}>
-                      {model.name}
-                    </MenuItem>
-                  ))
-                )}
-              </Select>
-            </FormControl>
-
-            {showHistory && (
-              <>
-                <TextField
-                  fullWidth
-                  size="small"
-                  placeholder="Search conversations..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  sx={{ mb: 2 }}
-                  InputProps={{
-                    startAdornment: (
-                      <InputAdornment position="start">
-                        <SearchIcon fontSize="small" />
-                      </InputAdornment>
-                    ),
-                    endAdornment: searchQuery && (
-                      <InputAdornment position="end">
-                        <IconButton
-                          size="small"
-                          onClick={() => setSearchQuery('')}
-                        >
-                          <ClearIcon fontSize="small" />
-                        </IconButton>
-                      </InputAdornment>
-                    )
-                  }}
-                />
-                <List sx={{ overflow: 'auto', flex: 1 }}>
-                  {filteredConversations.map((conv) => (
-                    <React.Fragment key={conv.id}>
-                      <ListItem
-                        button
-                        selected={currentConversationId === conv.id}
-                        onClick={() => selectConversation(conv.id)}
-                        secondaryAction={
-                          <Box>
-                            <Tooltip title="Edit Title">
-                              <IconButton
-                                edge="end"
-                                aria-label="edit"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleEditTitle(conv);
-                                }}
-                                size="small"
-                              >
-                                <EditIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title="Delete Conversation">
-                              <IconButton 
-                                edge="end" 
-                                aria-label="delete"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  deleteConversation(conv.id);
-                                }}
-                                size="small"
-                              >
-                                <DeleteIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          </Box>
-                        }
-                      >
-                        <ListItemText
-                          primary={conv.title}
-                          secondary={new Date(conv.createdAt).toLocaleDateString()}
-                        />
-                      </ListItem>
-                      <Divider />
-                    </React.Fragment>
-                  ))}
-                  {filteredConversations.length === 0 && (
-                    <ListItem>
-                      <ListItemText
-                        primary="No conversations found"
-                        sx={{ textAlign: 'center', color: 'text.secondary' }}
-                      />
-                    </ListItem>
-                  )}
-                </List>
-              </>
-            )}
-              {/* 设置和主题切换按钮放在左下角 */}
-            <Box sx={{ mt: 'auto', pt: 2, borderTop: 1, borderColor: 'divider' }}>
-              <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  startIcon={<SettingsIcon />}
-                  onClick={() => setShowSettings(true)}
-                >
-                  设置
-                </Button>
-                <Tooltip title={isDarkMode ? '切换到亮色主题' : '切换到深色主题'}>
-                  <IconButton
-                    onClick={() => setIsDarkMode(!isDarkMode)}
-                    color="primary"
-                    sx={{ 
-                      border: 1, 
-                      borderColor: 'divider',
-                      '&:hover': {
-                        borderColor: 'primary.main'
-                      }
-                    }}
+        <Container maxWidth="lg" sx={{ height: '100vh', py: 2 }}>
+          {showSettings ? (
+            <Settings 
+              onClose={() => setShowSettings(false)} 
+              onModelsUpdate={handleModelsUpdate}
+            />
+          ) : (
+            <Box sx={{ display: 'flex', height: '100%', gap: 2 }}>
+              {/* Sidebar */}
+              <Paper sx={{ width: 250, p: 2, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Button
+                    variant="outlined"
+                    startIcon={<HistoryIcon />}
+                    onClick={() => setShowHistory(!showHistory)}
                   >
-                    {isDarkMode ? <LightModeIcon /> : <DarkModeIcon />}
-                  </IconButton>
-                </Tooltip>
-              </Box>
-            </Box>
-          </Paper>
+                    {showHistory ? 'Hide History' : 'Show History'}
+                  </Button>
+                  <Tooltip title="New Conversation">
+                    <IconButton onClick={createNewConversation} color="primary">
+                      <AddIcon />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
 
-          {/* Main Chat Area */}
-          <Paper sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
-            {loading ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                <Typography variant="body1" color="text.secondary">
-                  Loading models...
-                </Typography>
-              </Box>
-            ) : error ? (
-              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-                <Typography variant="body1" color="error">
-                  {error}
-                </Typography>
-              </Box>
-            ) : (
-              <>
-                {/* 添加融合回答的切换按钮 */}
-                {selectedModels.length > 1 && (
-                  <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
-                    <FormControlLabel
-                      control={
-                        <Switch
-                          checked={mergeResponses}
-                          onChange={(e) => setMergeResponses(e.target.checked)}
-                          color="primary"
-                        />
-                      }
-                      label={
+                <FormControl fullWidth sx={{ mb: 2 }}>
+                  <InputLabel>Models</InputLabel>
+                  <Select
+                    multiple
+                    value={selectedModels}
+                    label="Models"
+                    onChange={(e) => setSelectedModels(e.target.value)}
+                    renderValue={(selected) => (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {selected.map((value) => (
+                          <Chip 
+                            key={value} 
+                            label={models.find(m => m.id === value)?.name || value}
+                            size="small"
+                          />
+                        ))}
+                      </Box>
+                    )}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <MenuItem disabled>
                         <Typography variant="body2" color="text.secondary">
-                          融合回答
+                          Loading models...
                         </Typography>
-                      }
+                      </MenuItem>
+                    ) : error ? (
+                      <MenuItem disabled>
+                        <Typography variant="body2" color="error">
+                          {error}
+                        </Typography>
+                      </MenuItem>
+                    ) : models.length === 0 ? (
+                      <MenuItem disabled>
+                        <Typography variant="body2" color="text.secondary">
+                          No models available
+                        </Typography>
+                      </MenuItem>
+                    ) : (
+                      models.map((model) => (
+                        <MenuItem key={model.id} value={model.id}>
+                          {model.name}
+                        </MenuItem>
+                      ))
+                    )}
+                  </Select>
+                </FormControl>
+
+                {showHistory && (
+                  <>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      placeholder="Search conversations..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      sx={{ mb: 2 }}
+                      InputProps={{
+                        startAdornment: (
+                          <InputAdornment position="start">
+                            <SearchIcon fontSize="small" />
+                          </InputAdornment>
+                        ),
+                        endAdornment: searchQuery && (
+                          <InputAdornment position="end">
+                            <IconButton
+                              size="small"
+                              onClick={() => setSearchQuery('')}
+                            >
+                              <ClearIcon fontSize="small" />
+                            </IconButton>
+                          </InputAdornment>
+                        )
+                      }}
                     />
-                  </Box>
-                )}                <Box className="messages-container" sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
-                  {getCurrentConversation().messages && getCurrentConversation().messages.length > 0 ? (
-                    getCurrentConversation().messages.map((msg, index) => {
-                      // 安全检查：确保消息对象存在且有必要的属性
-                      if (!msg || typeof msg !== 'object') {
-                        console.warn('Invalid message object at index:', index, msg);
-                        return null;
-                      }
-                      
-                      return (
-                        <Box
-                          key={`${currentConversationId}-${index}`}
-                          sx={{
-                            display: 'flex',
-                            justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                            mb: 2
-                          }}
-                        ><Paper
-                        className={
-                          msg.role === 'user' 
-                            ? 'user-message' 
-                            : msg.model === 'error'
-                              ? 'error-message'
-                              : 'assistant-message'
-                        }
-                        sx={{
-                          p: 2,
-                          maxWidth: '70%',
-                          backgroundColor: msg.role === 'user' 
-                            ? 'transparent' 
-                            : msg.model === 'error'
-                              ? 'transparent'
-                              : 'transparent'
+                    <List sx={{ overflow: 'auto', flex: 1 }}>
+                      {filteredConversations.map((conv) => (
+                        <React.Fragment key={conv.id}>
+                          <ListItem
+                            button
+                            selected={currentConversationId === conv.id}
+                            onClick={() => selectConversation(conv.id)}
+                            secondaryAction={
+                              <Box>
+                                <Tooltip title="Edit Title">
+                                  <IconButton
+                                    edge="end"
+                                    aria-label="edit"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleEditTitle(conv);
+                                    }}
+                                    size="small"
+                                  >
+                                    <EditIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                                <Tooltip title="Delete Conversation">
+                                  <IconButton 
+                                    edge="end" 
+                                    aria-label="delete"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      deleteConversation(conv.id);
+                                    }}
+                                    size="small"
+                                  >
+                                    <DeleteIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              </Box>
+                            }
+                          >
+                            <ListItemText
+                              primary={conv.title}
+                              secondary={new Date(conv.createdAt).toLocaleDateString()}
+                            />
+                          </ListItem>
+                          <Divider />
+                        </React.Fragment>
+                      ))}
+                      {filteredConversations.length === 0 && (
+                        <ListItem>
+                          <ListItemText
+                            primary="No conversations found"
+                            sx={{ textAlign: 'center', color: 'text.secondary' }}
+                          />
+                        </ListItem>
+                      )}
+                    </List>
+                  </>
+                )}
+                  {/* 设置和主题切换按钮放在左下角 */}
+                <Box sx={{ mt: 'auto', pt: 2, borderTop: 1, borderColor: 'divider' }}>
+                  <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
+                    <Button
+                      fullWidth
+                      variant="outlined"
+                      startIcon={<SettingsIcon />}
+                      onClick={() => setShowSettings(true)}
+                    >
+                      设置
+                    </Button>
+                    <Tooltip title={isDarkMode ? '切换到亮色主题' : '切换到深色主题'}>
+                      <IconButton
+                        onClick={() => setIsDarkMode(!isDarkMode)}
+                        color="primary"
+                        sx={{ 
+                          border: 1, 
+                          borderColor: 'divider',
+                          '&:hover': {
+                            borderColor: 'primary.main'
+                          }
                         }}
                       >
-                        {msg.role === 'user' ? (
-                          <Typography 
-                            variant="body1" 
-                            sx={{ 
-                              whiteSpace: 'pre-wrap',
-                              wordBreak: 'break-word'
+                        {isDarkMode ? <LightModeIcon /> : <DarkModeIcon />}
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                </Box>
+              </Paper>
+
+              {/* Main Chat Area */}
+              <Paper sx={{ flex: 1, p: 2, display: 'flex', flexDirection: 'column' }}>
+                {loading ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                    <Typography variant="body1" color="text.secondary">
+                      Loading models...
+                    </Typography>
+                  </Box>
+                ) : error ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
+                    <Typography variant="body1" color="error">
+                      {error}
+                    </Typography>
+                  </Box>
+                ) : (
+                  <>
+                    {/* 添加融合回答的切换按钮 */}
+                    {selectedModels.length > 1 && (
+                      <Box sx={{ mb: 2, display: 'flex', alignItems: 'center', justifyContent: 'flex-end' }}>
+                        <FormControlLabel
+                          control={
+                            <Switch
+                              checked={mergeResponses}
+                              onChange={(e) => setMergeResponses(e.target.checked)}
+                              color="primary"
+                            />
+                          }
+                          label={
+                            <Typography variant="body2" color="text.secondary">
+                              融合回答
+                            </Typography>
+                          }
+                        />
+                      </Box>
+                    )}                <Box className="messages-container" sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
+                      {getCurrentConversation().messages && getCurrentConversation().messages.length > 0 ? (
+                        getCurrentConversation().messages.map((msg, index) => {
+                          // 安全检查：确保消息对象存在且有必要的属性
+                          if (!msg || typeof msg !== 'object') {
+                            console.warn('Invalid message object at index:', index, msg);
+                            return null;
+                          }
+                          
+                          return (
+                            <Box
+                              key={`${currentConversationId}-${index}`}
+                              sx={{
+                                display: 'flex',
+                                justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                                mb: 2
+                              }}
+                            ><Paper
+                            className={
+                              msg.role === 'user' 
+                                ? 'user-message' 
+                                : msg.model === 'error'
+                                  ? 'error-message'
+                                  : 'assistant-message'
+                            }
+                            sx={{
+                              p: 2,
+                              maxWidth: '70%',
+                              backgroundColor: msg.role === 'user' 
+                                ? 'transparent' 
+                                : msg.model === 'error'
+                                  ? 'transparent'
+                                  : 'transparent'
                             }}
                           >
-                            {msg.content}
-                          </Typography>
-                        ) : (
-                          <Box sx={{ 
-                            '& .code-block': {
-                              margin: '1rem 0'
-                            },
-                            '& pre': { 
-                              backgroundColor: 'transparent',
-                              padding: 0,
-                              margin: 0
-                            },
-                            '& code': {
-                              backgroundColor: 'transparent',
-                              padding: 0
-                            },
-                            '& p': {
-                              margin: '0.5rem 0'
-                            },
-                            '& ul, & ol': {
-                              margin: '0.5rem 0',
-                              paddingLeft: '1.5rem'
-                            },
-                            '& table': {
-                              borderCollapse: 'collapse',
-                              width: '100%',
-                              margin: '0.5rem 0'
-                            },
-                            '& th, & td': {
-                              border: '1px solid #ddd',
-                              padding: '0.5rem',
-                              textAlign: 'left'
-                            },
-                            '& th': {
-                              backgroundColor: 'rgba(0, 0, 0, 0.05)'
-                            },
-                            '& blockquote': {
-                              borderLeft: '4px solid #ddd',
-                              margin: '0.5rem 0',
-                              padding: '0.5rem 0 0.5rem 1rem',
-                              color: 'text.secondary'
-                            }
-                          }}>
-                            <ReactMarkdown 
-                              remarkPlugins={[remarkGfm]}
-                              components={{
-                                code: ({node, inline, className, children, ...props}) => {
-                                  const match = /language-(\w+)/.exec(className || '');
-                                  if (inline) {
-                                    return (
-                                      <code className={className} {...props}>
-                                        {children}
-                                      </code>
-                                    );
-                                  }
-                                  
-                                  // 检查是否为多行代码
-                                  const isMultiLine = String(children).includes('\n');
-                                  
-                                  if (isMultiLine) {
-                                    const handleCopy = () => {
-                                      navigator.clipboard.writeText(String(children));
-                                    };
-                                    
-                                    return (
-                                      <div className="code-block" style={{display: 'block'}}>
-                                        <button className="copy-btn" onClick={handleCopy}>
-                                          复制
-                                        </button>
-                                        <pre style={{margin: 0}}>                                          <code 
-                                            className={match ? `language-${match[1]}` : ''} 
-                                            style={{
-                                              backgroundColor: '#0d1117',
-                                              color: '#4a9eff',
-                                              padding: '16px 20px',
-                                              borderRadius: '12px',
-                                              fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
-                                              fontSize: '14px',
-                                              lineHeight: '1.8',
-                                              display: 'block',
-                                              width: '100%',
-                                              boxSizing: 'border-box',
-                                              border: '1px solid #30363d',
-                                              whiteSpace: 'pre-wrap',
-                                              wordBreak: 'break-word',
-                                              overflow: 'auto',
-                                              margin: '12px 0',
-                                              boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-                                            }}
-                                            {...props}
-                                          >
+                            {msg.role === 'user' ? (
+                              <Typography 
+                                variant="body1" 
+                                sx={{ 
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word'
+                                }}
+                              >
+                                {msg.content}
+                              </Typography>
+                            ) : (
+                              <Box sx={{ 
+                                '& .code-block': {
+                                  margin: '1rem 0'
+                                },
+                                '& pre': { 
+                                  backgroundColor: 'transparent',
+                                  padding: 0,
+                                  margin: 0
+                                },
+                                '& code': {
+                                  backgroundColor: 'transparent',
+                                  padding: 0
+                                },
+                                '& p': {
+                                  margin: '0.5rem 0'
+                                },
+                                '& ul, & ol': {
+                                  margin: '0.5rem 0',
+                                  paddingLeft: '1.5rem'
+                                },
+                                '& table': {
+                                  borderCollapse: 'collapse',
+                                  width: '100%',
+                                  margin: '0.5rem 0'
+                                },
+                                '& th, & td': {
+                                  border: '1px solid #ddd',
+                                  padding: '0.5rem',
+                                  textAlign: 'left'
+                                },
+                                '& th': {
+                                  backgroundColor: 'rgba(0, 0, 0, 0.05)'
+                                },
+                                '& blockquote': {
+                                  borderLeft: '4px solid #ddd',
+                                  margin: '0.5rem 0',
+                                  padding: '0.5rem 0 0.5rem 1rem',
+                                  color: 'text.secondary'
+                                }
+                              }}>
+                                <ReactMarkdown 
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    code: ({node, inline, className, children, ...props}) => {
+                                      const match = /language-(\w+)/.exec(className || '');
+                                      if (inline) {
+                                        return (
+                                          <code className={className} {...props}>
                                             {children}
                                           </code>
-                                        </pre>
-                                      </div>
-                                    );
-                                  }
-                                  
-                                  // 单行代码简单显示
-                                  return (                                    <code 
-                                      className={match ? `language-${match[1]}` : ''} 
-                                      style={{
-                                        backgroundColor: 'rgba(116, 199, 236, 0.2)',
-                                        color: '#74c7ec',
-                                        padding: '2px 6px',
-                                        borderRadius: '4px',
-                                        fontFamily: 'JetBrains Mono, Consolas, monospace',
-                                        fontSize: '0.9em'
-                                      }}
-                                      {...props}
-                                    >
-                                      {children}
-                                    </code>
-                                  );
-                                }
-                              }}
-                            >
-                              {msg.content}
-                            </ReactMarkdown>
-                          </Box>
-                        )}
-                        {msg.model && (
-                          <Typography 
-                            variant="caption" 
-                            color="text.secondary" 
-                            sx={{ 
-                              display: 'block', 
-                              mt: 1,
-                              color: msg.model === 'error' ? 'error.main' : 'text.secondary'
-                            }}
-                          >
-                            {msg.model === 'merged' 
-                              ? '融合回答' 
-                              : msg.model === 'error'
-                                ? '错误'
-                                : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
-                          </Typography>
-                        )}                        <Typography variant="caption" color="text.secondary">
-                          {msg.timestamp && new Date(msg.timestamp).toLocaleTimeString()}
+                                        );
+                                      }
+                                      
+                                      // 检查是否为多行代码
+                                      const isMultiLine = String(children).includes('\n');
+                                      
+                                      if (isMultiLine) {
+                                        const handleCopy = () => {
+                                          navigator.clipboard.writeText(String(children));
+                                        };
+                                        
+                                        return (
+                                          <div className="code-block" style={{display: 'block'}}>
+                                            <button className="copy-btn" onClick={handleCopy}>
+                                              复制
+                                            </button>
+                                            <pre style={{margin: 0}}>                                          <code 
+                                                className={match ? `language-${match[1]}` : ''} 
+                                                style={{
+                                                  backgroundColor: '#0d1117',
+                                                  color: '#4a9eff',
+                                                  padding: '16px 20px',
+                                                  borderRadius: '12px',
+                                                  fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
+                                                  fontSize: '14px',
+                                                  lineHeight: '1.8',
+                                                  display: 'block',
+                                                  width: '100%',
+                                                  boxSizing: 'border-box',
+                                                  border: '1px solid #30363d',
+                                                  whiteSpace: 'pre-wrap',
+                                                  wordBreak: 'break-word',
+                                                  overflow: 'auto',
+                                                  margin: '12px 0',
+                                                  boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
+                                                }}
+                                                {...props}
+                                              >
+                                                {children}
+                                              </code>
+                                            </pre>
+                                          </div>
+                                        );
+                                      }
+                                      
+                                      // 单行代码简单显示
+                                      return (                                    <code 
+                                          className={match ? `language-${match[1]}` : ''} 
+                                          style={{
+                                            backgroundColor: 'rgba(116, 199, 236, 0.2)',
+                                            color: '#74c7ec',
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            fontFamily: 'JetBrains Mono, Consolas, monospace',
+                                            fontSize: '0.9em'
+                                          }}
+                                          {...props}
+                                        >
+                                          {children}
+                                        </code>
+                                      );
+                                    }
+                                  }}
+                                >
+                                  {msg.content}
+                                </ReactMarkdown>
+                              </Box>
+                            )}
+                            {msg.model && (
+                              <Typography 
+                                variant="caption" 
+                                color="text.secondary" 
+                                sx={{ 
+                                  display: 'block', 
+                                  mt: 1,
+                                  color: msg.model === 'error' ? 'error.main' : 'text.secondary'
+                                }}
+                              >
+                                {msg.model === 'merged' 
+                                  ? '融合回答' 
+                                  : msg.model === 'error'
+                                    ? '错误'
+                                    : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
+                              </Typography>
+                            )}                            <Typography variant="caption" color="text.secondary">
+                              {msg.timestamp && new Date(msg.timestamp).toLocaleTimeString()}
+                            </Typography>
+                          </Paper>
+                        </Box>
+                          );
+                        }).filter(Boolean) // 过滤掉null值
+                      ) : (
+                        <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
+                          暂无消息记录
                         </Typography>
-                      </Paper>
+                      )}
                     </Box>
-                      );
-                    }).filter(Boolean) // 过滤掉null值
-                  ) : (
-                    <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 4 }}>
-                      暂无消息记录
-                    </Typography>
-                  )}
-                </Box>
 
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                  <TextField
-                    fullWidth
-                    variant="outlined"
-                    placeholder="Type your message..."
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-                  />
-                  <Button
-                    variant="contained"
-                    endIcon={<SendIcon />}
-                    onClick={handleSend}
-                  >
-                    Send
-                  </Button>
-                </Box>
-              </>
-            )}
-          </Paper>
-        </Box>
-      )}
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                      <TextField
+                        fullWidth
+                        variant="outlined"
+                        placeholder="Type your message..."
+                        value={message}
+                        onChange={(e) => setMessage(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                      />
+                      <Button
+                        variant="contained"
+                        endIcon={<SendIcon />}
+                        onClick={handleSend}
+                      >
+                        Send
+                      </Button>
+                    </Box>
+                  </>
+                )}
+              </Paper>
+            </Box>
+          )}
+        </Container>
 
-      {/* Edit Title Dialog */}
-      <Dialog 
-        open={Boolean(editingConversation)} 
-        onClose={() => setEditingConversation(null)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>Edit Conversation Title</DialogTitle>
-        <DialogContent>
-          <TextField
-            autoFocus
-            margin="dense"
-            label="Title"
-            fullWidth
-            value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && saveEditTitle()}
-          />
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setEditingConversation(null)}>Cancel</Button>
-          <Button onClick={saveEditTitle} variant="contained">Save</Button>        </DialogActions>
-      </Dialog>
-    </Container>
+        {/* Edit Title Dialog */}
+        <Dialog 
+          open={Boolean(editingConversation)} 
+          onClose={() => setEditingConversation(null)}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle>Edit Conversation Title</DialogTitle>
+          <DialogContent>
+            <TextField
+              autoFocus
+              margin="dense"
+              label="Title"
+              fullWidth
+              value={editTitle}
+              onChange={(e) => setEditTitle(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && saveEditTitle()}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setEditingConversation(null)}>Cancel</Button>
+            <Button onClick={saveEditTitle} variant="contained">Save</Button>          </DialogActions>
+        </Dialog>
+      </Box>
     </ThemeProvider>
   );
 };
 
-export default App;
+// 主应用组件
+const App = () => {
+  const [showLogin, setShowLogin] = useState(true);
+  const { user } = useAuth();
+
+  const handleLoginSuccess = (isLogin) => {
+    if (!isLogin) {
+      // 只有在需要切换到注册页面时才设置
+      setShowLogin(false);
+    }
+  };
+
+  const handleRegisterSuccess = () => {
+    // 注册成功后切换到登录页面
+    setShowLogin(true);
+  };
+
+  // 如果用户已登录，直接显示主应用
+  if (user) {
+    return <MainApp />;
+  }
+
+  // 未登录时显示登录或注册页面
+  return showLogin ? (
+    <Login onLoginSuccess={handleLoginSuccess} />
+  ) : (
+    <Register onRegisterSuccess={handleRegisterSuccess} />
+  );
+};
+
+// 包装整个应用
+const AppWithAuth = () => (
+  <AuthProvider>
+    <App />
+  </AuthProvider>
+);
+
+export default AppWithAuth;

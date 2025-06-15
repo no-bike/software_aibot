@@ -15,6 +15,7 @@ from services.sparkx1_service import get_sparkx1_response, get_sparkx1_stream_re
 from services.moonshot_service import get_moonshot_response, get_moonshot_stream_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 from services.mongodb_service import mongodb_service
+from services.auth_routes import router as auth_router
 
 # 北京时区
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -42,6 +43,9 @@ app.add_middleware(
     expose_headers=["*"],
     max_age=3600,
 )
+
+# 添加认证路由
+app.include_router(auth_router, prefix="/api/auth", tags=["认证"])
 
 # 添加测试路由
 @app.get("/api/test")
