@@ -261,7 +261,7 @@ async def chat(request: MessageRequest, req: Request):
                 logger.info(f"创建新会话: {request.conversationId} for user {user_id}")
                 conversation = {
                     "id": request.conversationId,
-                    "title": f"对话 {request.conversationId[:8]}",
+                    "title": request.message[:30] + "..." if len(request.message) > 30 else request.message,  # 使用用户的第一条消息作为标题
                     "messages": [],
                     "models": request.modelIds,
                     "createdAt": get_beijing_time().isoformat(),
