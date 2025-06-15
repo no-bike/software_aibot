@@ -553,29 +553,38 @@ async def fusion_response(request: FusionRequest):
                     "Access-Control-Allow-Credentials": "true"
                 }
             )
-        
-        # 获取会话历史（如果有）
+          # 获取会话历史（如果有）
         history = []
-        if request.conversationId and request.conversationId in conversations:
-            conversation = conversations[request.conversationId]
-            history = [
-                {"role": msg["role"], "content": msg["content"]}
-                for msg in conversation["messages"][:-1]  # 不包括最新的用户消息
-            ]
+        default_user_id = "default_user"  # 所有用户统一使用这个ID
+        
+        if request.conversationId:
+            # 从 MongoDB 获取会话历史
+            recent_messages = await mongodb_service.get_conversation_history(
+                request.conversationId, limit=6
+            )
+            # 排除刚刚添加的用户消息
+            for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
+                if msg["role"] in ["user", "assistant"]:
+                    history.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+            logger.info(f"会话历史 (最近{len(history)}条): 已加载")
         
         # 调用融合服务
         fused_content = await get_fusion_response(request.responses, history)
         
-        # 如果存在会话ID，将融合结果添加到会话历史
-        if request.conversationId and request.conversationId in conversations:
+        # 如果存在会话ID，将融合结果保存到 MongoDB
+        if request.conversationId:
             fusion_message = {
                 "content": fused_content,
                 "role": "assistant",
                 "model": "fusion",
                 "timestamp": get_beijing_time().isoformat()
             }
-            conversations[request.conversationId]["messages"].append(fusion_message)
-            logger.info(f"添加融合回答到会话: {fusion_message}")
+            # 保存融合回答到 MongoDB
+            await mongodb_service.save_message(request.conversationId, fusion_message, default_user_id)
+            logger.info(f"融合回答已保存到MongoDB: {fusion_message}")
         
         return JSONResponse(
             status_code=200,
@@ -642,9 +651,9 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
         # 计算处理时间
         processing_time = (end_time - start_time).total_seconds()
         result["processing_time"] = processing_time
-        
-        # 如果存在会话ID，将融合结果添加到会话历史
-        if request.conversationId and request.conversationId in conversations:
+          # 如果存在会话ID，将融合结果保存到 MongoDB
+        if request.conversationId:
+            default_user_id = "default_user"  # 所有用户统一使用这个ID
             fusion_message = {
                 "content": result["fused_content"],
                 "role": "assistant",
@@ -653,8 +662,9 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
                 "models_used": result.get("models_used", []),
                 "timestamp": end_time.isoformat()
             }
-            conversations[request.conversationId]["messages"].append(fusion_message)
-            logger.info(f"添加高级融合回答到会话: {fusion_message}")
+            # 保存高级融合回答到 MongoDB
+            await mongodb_service.save_message(request.conversationId, fusion_message, default_user_id)
+            logger.info(f"高级融合回答已保存到MongoDB: {fusion_message}")
         
         logger.info(f"✅ 高级融合完成，方法: {result.get('fusion_method')}, 耗时: {processing_time:.2f}s")
         
