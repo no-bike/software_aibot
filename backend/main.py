@@ -241,16 +241,23 @@ async def chat(request: MessageRequest):
         # 单个模型时使用流式响应
         if len(request.modelIds) == 1:
             model_id = request.modelIds[0]
-            try:
-                # 准备会话历史
+            try:                # 准备会话历史 - 只保留最近的几轮对话，避免重复回答
                 history = []
-                if conversation:
-                    for msg in conversation["messages"][:-1]:  # 不包含刚刚添加的用户消息
-                        history.append({
-                            "role": msg["role"],
-                            "content": msg["content"]
-                        })
-                    logger.info(f"会话历史: {history}")
+                if conversation and len(conversation["messages"]) > 1:
+                    # 只保留最近3轮对话（6条消息：3个用户+3个AI）
+                    recent_messages = conversation["messages"][:-1]  # 不包含刚刚添加的用户消息
+                    # 只取最近的几条消息，避免上下文过长
+                    if len(recent_messages) > 6:
+                        recent_messages = recent_messages[-6:]
+                    
+                    for msg in recent_messages:
+                        # 只有用户消息和助手消息需要加入历史
+                        if msg["role"] in ["user", "assistant"]:
+                            history.append({
+                                "role": msg["role"],
+                                "content": msg["content"]
+                            })
+                    logger.info(f"会话历史 (最近{len(history)}条): {history}")
                 
                 logger.info(f"正在流式调用模型 {model_id} 的API")
                 
@@ -317,20 +324,27 @@ async def chat(request: MessageRequest):
                         "Access-Control-Allow-Credentials": "true"
                     }
                 )
-        
-        # 多个模型时保持原有逻辑
+          # 多个模型时保持原有逻辑
         responses = []
         for model_id in request.modelIds:
             try:
-                # 准备会话历史
+                # 准备会话历史 - 只保留最近的几轮对话，避免重复回答
                 history = []
-                if conversation:
-                    for msg in conversation["messages"][:-1]:
-                        history.append({
-                            "role": msg["role"],
-                            "content": msg["content"]
-                        })
-                    logger.info(f"会话历史: {history}")
+                if conversation and len(conversation["messages"]) > 1:
+                    # 只保留最近3轮对话（6条消息：3个用户+3个AI）
+                    recent_messages = conversation["messages"][:-1]  # 不包含刚刚添加的用户消息
+                    # 只取最近的几条消息，避免上下文过长
+                    if len(recent_messages) > 6:
+                        recent_messages = recent_messages[-6:]
+                    
+                    for msg in recent_messages:
+                        # 只有用户消息和助手消息需要加入历史
+                        if msg["role"] in ["user", "assistant"]:
+                            history.append({
+                                "role": msg["role"],
+                                "content": msg["content"]
+                            })
+                    logger.info(f"会话历史 (最近{len(history)}条): {history}")
                 
                 logger.info(f"正在调用模型 {model_id} 的API")
                 response_content = None
