@@ -239,6 +239,28 @@ export const getConversationDetail = async (conversationId) => {
   }
 };
 
+// 更新会话标题
+export const updateConversationTitle = async (conversationId, title) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/title`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to update conversation title');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error updating conversation title:', error);
+    throw error;
+  }
+};
+
 // 删除会话
 export const deleteConversation = async (conversationId) => {
   try {

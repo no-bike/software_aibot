@@ -42,7 +42,7 @@ import LightModeIcon from '@mui/icons-material/LightMode';
 import Settings from './components/Settings';
 import darkTheme from './theme/darkTheme';
 import lightTheme from './theme/lightTheme';
-import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation, getConversationDetail } from './services/apiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation as deleteConversationAPI, getConversationDetail, updateConversationTitle } from './services/apiService';
 
 const App = () => {
   const [message, setMessage] = useState('');
@@ -402,14 +402,30 @@ const App = () => {
         });
       });
     }
-  };
-
-  const deleteConversation = (conversationId) => {
-    setConversations(prevConversations => 
-      prevConversations.filter(conv => conv.id !== conversationId)
-    );
-    if (currentConversationId === conversationId) {
-      setCurrentConversationId(null);
+  };  const deleteConversation = async (conversationId) => {
+    try {
+      // 调用后端API删除会话
+      await deleteConversationAPI(conversationId);
+      console.log('Conversation deleted from server:', conversationId);
+      
+      // 从本地状态中删除
+      setConversations(prevConversations => 
+        prevConversations.filter(conv => conv.id !== conversationId)
+      );
+      
+      // 如果删除的是当前会话，清除当前会话ID
+      if (currentConversationId === conversationId) {
+        setCurrentConversationId(null);
+      }
+    } catch (error) {
+      console.error('Error deleting conversation:', error);
+      // 如果API调用失败，仍然从本地删除（用户体验优先）
+      setConversations(prevConversations => 
+        prevConversations.filter(conv => conv.id !== conversationId)
+      );
+      if (currentConversationId === conversationId) {
+        setCurrentConversationId(null);
+      }
     }
   };
 
@@ -417,16 +433,32 @@ const App = () => {
     setEditingConversation(conversation);
     setEditTitle(conversation.title);
   };
-
-  const saveEditTitle = () => {
+  const saveEditTitle = async () => {
     if (editingConversation && editTitle.trim()) {
-      setConversations(prevConversations => 
-        prevConversations.map(conv => 
-          conv.id === editingConversation.id 
-            ? { ...conv, title: editTitle.trim() }
-            : conv
-        )
-      );
+      try {
+        // 调用后端API更新标题
+        await updateConversationTitle(editingConversation.id, editTitle.trim());
+        console.log('Conversation title updated on server:', editingConversation.id);
+        
+        // 更新本地状态
+        setConversations(prevConversations => 
+          prevConversations.map(conv => 
+            conv.id === editingConversation.id 
+              ? { ...conv, title: editTitle.trim() }
+              : conv
+          )
+        );
+      } catch (error) {
+        console.error('Error updating conversation title:', error);
+        // 如果API调用失败，仍然在本地更新（用户体验优先）
+        setConversations(prevConversations => 
+          prevConversations.map(conv => 
+            conv.id === editingConversation.id 
+              ? { ...conv, title: editTitle.trim() }
+              : conv
+          )
+        );
+      }
     }
     setEditingConversation(null);
     setEditTitle('');

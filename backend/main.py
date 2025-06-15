@@ -91,6 +91,10 @@ class AdvancedFusionRequest(BaseModel):
     topK: Optional[int] = 3
     conversationId: Optional[str] = None
 
+# 更新会话标题请求模型
+class UpdateTitleRequest(BaseModel):
+    title: str
+
 # 内存存储
 models = {}
 selected_models = []
@@ -836,6 +840,42 @@ async def delete_conversation_endpoint(conversation_id: str):
         return JSONResponse(
             status_code=500,
             content={"detail": f"删除会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 更新会话标题
+@app.put("/api/conversations/{conversation_id}/title")
+async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest):
+    try:
+        default_user_id = "default_user"  # 所有用户统一使用这个ID
+        success = await mongodb_service.update_conversation_title(
+            conversation_id, request.title, default_user_id
+        )
+        if success:
+            return JSONResponse(
+                content={"message": "标题更新成功"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"更新会话标题失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"更新会话标题失败: {str(e)}"},
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"

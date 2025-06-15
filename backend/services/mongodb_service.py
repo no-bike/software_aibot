@@ -141,9 +141,7 @@ class MongoDBService:
                     "role": msg.get("role"),
                     "content": msg.get("content"),
                     "model": msg.get("model", ""),
-                    "timestamp": msg.get("timestamp")                })
-            
-            # 构建返回数据
+                    "timestamp": msg.get("timestamp")                })            # 构建返回数据
             result = {
                 "id": conversation["conversation_id"],
                 "title": conversation.get("title", ""),
@@ -171,7 +169,8 @@ class MongoDBService:
                     "title": conv.get("title", ""),
                     "models": conv.get("models", []),
                     "createdAt": conv.get("created_at"),
-                    "messageCount": conv.get("message_count", 0),                    "updatedAt": conv.get("updated_at"),
+                    "messageCount": conv.get("message_count", 0),
+                    "updatedAt": conv.get("updated_at"),
                     "userId": conv.get("user_id", user_id)
                 })
             
@@ -180,7 +179,7 @@ class MongoDBService:
         except Exception as e:
             logger.error(f"Failed to get conversations for user {user_id}: {str(e)}")
             return []
-    
+
     async def delete_conversation(self, conversation_id: str, user_id: str = "default_user") -> bool:
         """删除指定用户的会话和相关消息"""
         try:
@@ -203,6 +202,30 @@ class MongoDBService:
             logger.error(f"Failed to delete conversation: {str(e)}")
             return False
     
+    async def update_conversation_title(self, conversation_id: str, title: str, user_id: str = "default_user") -> bool:
+        """更新指定用户的会话标题"""
+        try:
+            result = await self.db.conversations.update_one(
+                {"conversation_id": conversation_id, "user_id": user_id},
+                {
+                    "$set": {
+                        "title": title,
+                        "updated_at": datetime.utcnow().isoformat()
+                    }
+                }
+            )
+            
+            if result.matched_count > 0:
+                logger.info(f"Conversation title updated: {conversation_id} for user: {user_id}")
+                return True
+            else:
+                logger.warning(f"Conversation not found or not owned by user: {conversation_id}, {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to update conversation title: {str(e)}")
+            return False
+    
     async def get_conversation_history(self, conversation_id: str, limit: int = 20) -> List[Dict]:
         """获取会话历史消息（用于AI上下文）"""
         try:
@@ -217,149 +240,69 @@ class MongoDBService:
                     "content": msg.get("content")
                 })
             
-            # 反转顺序，最早的消息在前
-            messages.reverse()
-            return messages
+            # 返回时间顺序排列（最早的在前）
+            return list(reversed(messages))
             
         except Exception as e:
             logger.error(f"Failed to get conversation history: {str(e)}")
             return []
     
-    async def get_user_conversations(self, user_id: str) -> List[Dict]:
-        """获取特定用户的所有会话列表"""
-        try:
-            conversations = []
-            cursor = self.db.conversations.find(
-                {"user_id": user_id}
-            ).sort("updated_at", -1)
-            
-            async for conv in cursor:
-                conversations.append({
-                    "id": conv["conversation_id"],
-                    "title": conv.get("title", ""),
-                    "models": conv.get("models", []),
-                    "createdAt": conv.get("created_at"),
-                    "messageCount": conv.get("message_count", 0),
-                    "updatedAt": conv.get("updated_at"),
-                    "userId": conv.get("user_id")
-                })
-            
-            return conversations
-            
-        except Exception as e:
-            logger.error(f"Failed to get user conversations: {str(e)}")
-            return []
-    
     async def get_user_conversation_with_messages(self, user_id: str, conversation_id: str) -> Optional[Dict]:
-        """获取特定用户的会话信息和消息"""
-        try:
-            # 获取会话基本信息，确保是该用户的会话
-            conversation = await self.db.conversations.find_one(
-                {"conversation_id": conversation_id, "user_id": user_id}
-            )
-            
-            if not conversation:
-                return None
-            
-            # 获取会话消息
-            messages_cursor = self.db.messages.find(
-                {"conversation_id": conversation_id}
-            ).sort("timestamp", 1)
-            
-            messages = []
-            async for msg in messages_cursor:
-                messages.append({
-                    "role": msg.get("role"),
-                    "content": msg.get("content"),
-                    "model": msg.get("model", ""),
-                    "timestamp": msg.get("timestamp")
-                })
-            
-            # 构建返回数据
-            result = {
-                "id": conversation["conversation_id"],
-                "title": conversation.get("title", ""),
-                "models": conversation.get("models", []),
-                "createdAt": conversation.get("created_at"),
-                "userId": conversation.get("user_id"),
-                "messages": messages
-            }
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to get user conversation: {str(e)}")
-            return None
+        """获取用户的会话及其消息"""
+        return await self.get_conversation(conversation_id, user_id)
     
+    async def get_user_conversations(self, user_id: str) -> List[Dict]:
+        """获取用户的所有会话"""
+        return await self.get_all_conversations(user_id)
+
     async def delete_user_conversation(self, user_id: str, conversation_id: str) -> bool:
-        """删除特定用户的会话和相关消息"""
-        try:
-            # 验证会话属于该用户
-            conversation = await self.db.conversations.find_one(
-                {"conversation_id": conversation_id, "user_id": user_id}
-            )
-            
-            if not conversation:
-                logger.warning(f"Conversation {conversation_id} not found for user {user_id}")
-                return False
-            
-            # 删除消息
-            await self.db.messages.delete_many({"conversation_id": conversation_id})
-            
-            # 删除会话
-            result = await self.db.conversations.delete_one(
-                {"conversation_id": conversation_id, "user_id": user_id}
-            )
-            
-            if result.deleted_count > 0:
-                logger.info(f"Conversation {conversation_id} deleted for user {user_id}")
-                return True
-            else:
-                logger.warning(f"Failed to delete conversation {conversation_id} for user {user_id}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Failed to delete user conversation: {str(e)}")
-            return False
+        """删除用户的会话"""
+        return await self.delete_conversation(conversation_id, user_id)
     
     async def get_user_statistics(self, user_id: str) -> Dict:
-        """获取用户的统计信息"""
+        """获取用户统计信息"""
         try:
             # 获取会话数量
-            conversation_count = await self.db.conversations.count_documents(
-                {"user_id": user_id}
-            )
+            conversation_count = await self.db.conversations.count_documents({"user_id": user_id})
             
             # 获取消息数量
             pipeline = [
-                {"$match": {"user_id": user_id}},
-                {"$group": {"_id": None, "total_messages": {"$sum": "$message_count"}}}
+                {
+                    "$lookup": {
+                        "from": "conversations",
+                        "localField": "conversation_id",
+                        "foreignField": "conversation_id",
+                        "as": "conversation"
+                    }
+                },
+                {
+                    "$unwind": "$conversation"
+                },
+                {
+                    "$match": {
+                        "conversation.user_id": user_id
+                    }
+                },
+                {
+                    "$count": "total_messages"
+                }
             ]
-            message_stats = await self.db.conversations.aggregate(pipeline).to_list(1)
-            total_messages = message_stats[0]["total_messages"] if message_stats else 0
             
-            # 获取最近活动时间
-            latest_conversation = await self.db.conversations.find_one(
-                {"user_id": user_id},
-                sort=[("updated_at", -1)]
-            )
+            message_count_result = await self.db.messages.aggregate(pipeline).to_list(1)
+            message_count = message_count_result[0]["total_messages"] if message_count_result else 0
             
-            result = {
-                "userId": user_id,
-                "conversationCount": conversation_count,
-                "totalMessages": total_messages,
-                "lastActivity": latest_conversation.get("updated_at") if latest_conversation else None
+            return {
+                "user_id": user_id,
+                "conversation_count": conversation_count,
+                "message_count": message_count
             }
-            
-            return result
             
         except Exception as e:
             logger.error(f"Failed to get user statistics: {str(e)}")
             return {
-                "userId": user_id,
-                "conversationCount": 0,
-                "totalMessages": 0,
-                "lastActivity": None
+                "user_id": user_id,
+                "conversation_count": 0,
+                "message_count": 0
             }
 
 # 全局 MongoDB 服务实例
