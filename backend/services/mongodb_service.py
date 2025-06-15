@@ -1,12 +1,19 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 import json
 
 logger = logging.getLogger(__name__)
+
+# 北京时区
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+def get_beijing_time():
+    """获取北京时间"""
+    return datetime.now(BEIJING_TZ)
 
 class MongoDBService:
     def __init__(self):
@@ -63,15 +70,14 @@ class MongoDBService:
             if not conversation_id:
                 logger.error("Missing conversation_id")
                 return False
-            
-            # 准备会话数据
+              # 准备会话数据
             conv_doc = {
                 "conversation_id": conversation_id,
                 "user_id": user_id,  # 添加用户ID
                 "title": conversation_data.get("title", ""),
                 "models": conversation_data.get("models", []),
-                "created_at": conversation_data.get("createdAt", datetime.utcnow().isoformat()),
-                "updated_at": datetime.utcnow().isoformat(),
+                "created_at": conversation_data.get("createdAt", get_beijing_time().isoformat()),
+                "updated_at": get_beijing_time().isoformat(),
                 "message_count": len(conversation_data.get("messages", []))
             }
             
@@ -90,28 +96,26 @@ class MongoDBService:
     
     async def save_message(self, conversation_id: str, message_data: Dict, user_id: str = "default_user") -> bool:
         """保存消息"""
-        try:
-            # 准备消息数据
+        try:            # 准备消息数据
             msg_doc = {
                 "conversation_id": conversation_id,
                 "role": message_data.get("role"),
                 "content": message_data.get("content"),
                 "model": message_data.get("model", ""),
-                "timestamp": message_data.get("timestamp", datetime.utcnow().isoformat()),
-                "created_at": datetime.utcnow().isoformat()
+                "timestamp": message_data.get("timestamp", get_beijing_time().isoformat()),
+                "created_at": get_beijing_time().isoformat()
             }
             
             # 插入消息
             result = await self.db.messages.insert_one(msg_doc)
-            
-            # 更新会话的最后更新时间和消息数量（只更新属于该用户的会话）
+              # 更新会话的最后更新时间和消息数量（只更新属于该用户的会话）
             await self.db.conversations.update_one(
                 {"conversation_id": conversation_id, "user_id": user_id},
                 {
-                    "$set": {"updated_at": datetime.utcnow().isoformat()},
+                    "$set": {"updated_at": get_beijing_time().isoformat()},
                     "$inc": {"message_count": 1}
                 }
-            )            
+            )
             logger.info(f"Message saved for conversation: {conversation_id}, user: {user_id}")
             return True
             
@@ -206,11 +210,10 @@ class MongoDBService:
         """更新指定用户的会话标题"""
         try:
             result = await self.db.conversations.update_one(
-                {"conversation_id": conversation_id, "user_id": user_id},
-                {
+                {"conversation_id": conversation_id, "user_id": user_id},                {
                     "$set": {
                         "title": title,
-                        "updated_at": datetime.utcnow().isoformat()
+                        "updated_at": get_beijing_time().isoformat()
                     }
                 }
             )

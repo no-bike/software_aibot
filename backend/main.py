@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import httpx
 import os
 import asyncio
@@ -15,6 +15,13 @@ from services.sparkx1_service import get_sparkx1_response, get_sparkx1_stream_re
 from services.moonshot_service import get_moonshot_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 from services.mongodb_service import mongodb_service
+
+# 北京时区
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+def get_beijing_time():
+    """获取北京时间"""
+    return datetime.now(BEIJING_TZ)
 
 # 配置日志
 logging.basicConfig(
@@ -233,9 +240,10 @@ async def chat(request: MessageRequest):
                     content={"detail": f"找不到模型ID {model_id}"},
                     headers={
                         "Access-Control-Allow-Origin": "http://localhost:3000",
-                        "Access-Control-Allow-Credentials": "true"
-                    }
-                )        # 获取或创建会话
+                        "Access-Control-Allow-Credentials": "true"                    }
+                )
+        
+        # 获取或创建会话
         conversation = None
         default_user_id = "default_user"  # 所有用户统一使用这个ID
         
@@ -251,24 +259,25 @@ async def chat(request: MessageRequest):
                     "title": f"对话 {request.conversationId[:8]}",
                     "messages": [],
                     "models": request.modelIds,
-                    "createdAt": datetime.utcnow().isoformat()
+                    "createdAt": get_beijing_time().isoformat()
                 }
                 # 保存到 MongoDB
                 await mongodb_service.save_conversation(conversation, default_user_id)
             logger.info(f"当前会话信息: 消息数量={len(conversation.get('messages', []))}")
-        
-        # 添加用户消息
+          # 添加用户消息
         user_message = {
             "content": request.message,
             "role": "user",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": get_beijing_time().isoformat()
         }
-          # 保存用户消息到 MongoDB
+        
+        # 保存用户消息到 MongoDB
         if conversation:
             await mongodb_service.save_message(request.conversationId, user_message, default_user_id)
             conversation["messages"].append(user_message)
             logger.info(f"添加用户消息到会话: {user_message}")
-          # 单个模型时使用流式响应
+        
+        # 单个模型时使用流式响应
         if len(request.modelIds) == 1:
             model_id = request.modelIds[0]
             try:
@@ -325,7 +334,7 @@ async def chat(request: MessageRequest):
                                 "content": collected_content.strip(),
                                 "role": "assistant",
                                 "model": model_id,
-                                "timestamp": datetime.utcnow().isoformat()
+                                "timestamp": get_beijing_time().isoformat()
                             }
                             try:
                                 await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
@@ -377,7 +386,7 @@ async def chat(request: MessageRequest):
                                 "content": collected_content.strip(),
                                 "role": "assistant", 
                                 "model": model_id,
-                                "timestamp": datetime.utcnow().isoformat()
+                                "timestamp": get_beijing_time().isoformat()
                             }
                             try:
                                 await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
@@ -415,7 +424,7 @@ async def chat(request: MessageRequest):
                             "content": response_content,
                             "role": "assistant",
                             "model": model_id,
-                            "timestamp": datetime.utcnow().isoformat()
+                            "timestamp": get_beijing_time().isoformat()
                         }
                         conversation["messages"].append(ai_message)
                         # 保存AI响应到 MongoDB
@@ -489,7 +498,7 @@ async def chat(request: MessageRequest):
                         "content": response_content,
                         "role": "assistant",
                         "model": model_id,
-                        "timestamp": datetime.utcnow().isoformat()
+                        "timestamp": get_beijing_time().isoformat()
                     }
                     await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
                     logger.info(f"AI响应已保存到MongoDB: {model_id}")
@@ -563,7 +572,7 @@ async def fusion_response(request: FusionRequest):
                 "content": fused_content,
                 "role": "assistant",
                 "model": "fusion",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": get_beijing_time().isoformat()
             }
             conversations[request.conversationId]["messages"].append(fusion_message)
             logger.info(f"添加融合回答到会话: {fusion_message}")
@@ -621,14 +630,14 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
             })
         
         # 调用高级融合服务
-        start_time = datetime.utcnow()
+        start_time = get_beijing_time()
         result = await get_advanced_fusion_response_direct(
             query=request.query,
             responses=formatted_responses,
             fusion_method=request.fusionMethod,
             top_k=request.topK
         )
-        end_time = datetime.utcnow()
+        end_time = get_beijing_time()
         
         # 计算处理时间
         processing_time = (end_time - start_time).total_seconds()
