@@ -5,6 +5,7 @@ from typing import List, Dict, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 import json
+from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -307,6 +308,98 @@ class MongoDBService:
                 "conversation_count": 0,
                 "message_count": 0
             }
+
+    async def create_user(self, user_data: dict) -> dict:
+        """创建新用户"""
+        try:
+            # 检查用户名是否已存在
+            existing_user = await self.db.users.find_one({"username": user_data["username"]})
+            if existing_user:
+                raise HTTPException(status_code=400, detail="用户名已存在")
+            
+            # 检查邮箱是否已存在
+            existing_email = await self.db.users.find_one({"email": user_data["email"]})
+            if existing_email:
+                raise HTTPException(status_code=400, detail="邮箱已被注册")
+            
+            # 创建用户文档
+            user_doc = {
+                "username": user_data["username"],
+                "email": user_data["email"],
+                "hashed_password": user_data["hashed_password"],
+                "created_at": datetime.now(),
+                "last_login": None,
+                "is_active": True
+            }
+            
+            result = await self.db.users.insert_one(user_doc)
+            user_doc["id"] = str(result.inserted_id)
+            
+            return user_doc
+            
+        except Exception as e:
+            logger.error(f"创建用户失败: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"创建用户失败: {str(e)}")
+
+    async def get_user_by_username(self, username: str) -> Optional[dict]:
+        """通过用户名获取用户"""
+        try:
+            user = await self.db.users.find_one({"username": username})
+            if user:
+                user["id"] = str(user["_id"])
+                return user
+            return None
+        except Exception as e:
+            logger.error(f"获取用户失败: {str(e)}")
+            return None
+
+    async def get_user_by_email(self, email: str) -> Optional[dict]:
+        """通过邮箱获取用户"""
+        try:
+            user = await self.db.users.find_one({"email": email})
+            if user:
+                user["id"] = str(user["_id"])
+                return user
+            return None
+        except Exception as e:
+            logger.error(f"获取用户失败: {str(e)}")
+            return None
+
+    async def update_user_last_login(self, user_id: str) -> bool:
+        """更新用户最后登录时间"""
+        try:
+            result = await self.db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {"last_login": datetime.now()}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"更新用户登录时间失败: {str(e)}")
+            return False
+
+    async def update_user_password(self, user_id: str, new_hashed_password: str) -> bool:
+        """更新用户密码"""
+        try:
+            result = await self.db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {"hashed_password": new_hashed_password}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"更新用户密码失败: {str(e)}")
+            return False
+
+    async def deactivate_user(self, user_id: str) -> bool:
+        """停用用户"""
+        try:
+            result = await self.db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": {"is_active": False}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"停用用户失败: {str(e)}")
+            return False
 
 # 全局 MongoDB 服务实例
 mongodb_service = MongoDBService()

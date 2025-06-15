@@ -12,7 +12,7 @@ import logging
 import traceback
 from services.deepseek_service import get_deepseek_response, get_deepseek_stream_response
 from services.sparkx1_service import get_sparkx1_response, get_sparkx1_stream_response
-from services.moonshot_service import get_moonshot_response
+from services.moonshot_service import get_moonshot_response, get_moonshot_stream_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 from services.mongodb_service import mongodb_service
 
@@ -398,6 +398,61 @@ async def chat(request: MessageRequest):
                     
                     return StreamingResponse(
                         stream_with_save_sparkx1(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                elif model_id == "moonshot":
+                    api_config = models.get(model_id)
+                    if not api_config:
+                        raise HTTPException(status_code=400, detail="Moonshot模型未配置")
+                    # 创建一个包装的流式生成器，在结束后保存消息
+                    async def stream_with_save_moonshot():
+                        collected_content = ""
+                        chunk_count = 0
+                        async for chunk in get_moonshot_stream_response(request.message, history, api_config):
+                            chunk_count += 1
+                            # 解析SSE格式的数据，提取content
+                            lines = chunk.strip().split('\n')
+                            for line in lines:
+                                if line.startswith('data: '):
+                                    data_str = line[6:].strip()
+                                    if data_str and data_str != '[DONE]':
+                                        try:
+                                            import json
+                                            data = json.loads(data_str)
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    collected_content += delta['content']
+                                        except json.JSONDecodeError:
+                                            # 如果不是JSON格式，可能是原始文本，直接添加
+                                            if not data_str.startswith('data:') and data_str:
+                                                collected_content += data_str
+                                        except Exception as e:
+                                            logger.debug(f"解析流数据块失败: {e}")
+                            yield chunk
+                        
+                        # 流式响应结束后保存AI回复
+                        if collected_content.strip() and conversation:
+                            ai_message = {
+                                "content": collected_content.strip(),
+                                "role": "assistant",
+                                "model": model_id,
+                                "timestamp": get_beijing_time().isoformat()
+                            }
+                            try:
+                                await mongodb_service.save_message(request.conversationId, ai_message, default_user_id)
+                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
+                            except Exception as e:
+                                logger.error(f"保存AI响应失败: {e}")
+                        else:
+                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
+                    
+                    return StreamingResponse(
+                        stream_with_save_moonshot(),
                         media_type="text/event-stream",
                         headers={
                             "Access-Control-Allow-Origin": "http://localhost:3000",
