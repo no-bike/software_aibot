@@ -1265,3 +1265,53 @@ async def delete_share(share_id: str, request: Request):
                 "Access-Control-Allow-Credentials": "true"
             }
         )
+
+# 获取当前用户信息
+@app.get("/api/users/me")
+async def get_current_user(request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id")
+        if not user_id:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "未登录"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 从数据库获取用户信息
+        user = await mongodb_service.get_user_by_id(user_id)
+        if not user:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "用户不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content={
+                "id": str(user["_id"]),
+                "username": user.get("username", ""),
+                "email": user.get("email", "")
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取用户信息失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户信息失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )

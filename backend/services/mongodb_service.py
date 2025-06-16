@@ -572,5 +572,16 @@ class MongoDBService:
             logger.error(f"Failed to delete share: {str(e)}")
             return False
 
+    async def get_user_by_id(self, user_id: str) -> Optional[dict]:
+        """通过用户ID获取用户信息"""
+        try:
+            user = await self.db.users.find_one({"_id": ObjectId(user_id)})
+            if user:
+                return user
+            return None
+        except Exception as e:
+            logger.error(f"获取用户信息失败: {str(e)}")
+            return None
+
 # 全局 MongoDB 服务实例
 mongodb_service = MongoDBService()

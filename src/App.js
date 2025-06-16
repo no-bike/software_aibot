@@ -572,6 +572,11 @@ const MainApp = () => {
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               AI 助手
             </Typography>
+            {user && (
+              <Typography variant="body2" color="inherit" sx={{ mr: 2 }}>
+                用户名: {user.username || '未知'}
+              </Typography>
+            )}
             <Tooltip title="查看分享的会话">
               <IconButton color="inherit" onClick={() => setShowViewSharedDialog(true)}>
                 <VisibilityIcon />
