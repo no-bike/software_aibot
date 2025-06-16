@@ -1227,3 +1227,41 @@ async def get_user_shares(request: Request):
                 "Access-Control-Allow-Credentials": "true"
             }
         )
+
+# 删除分享
+@app.delete("/api/shared/{share_id}")
+async def delete_share(share_id: str, request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        
+        # 删除分享
+        result = await mongodb_service.deactivate_share(share_id, user_id)
+        if not result:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "分享不存在或无权删除"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content={"detail": "分享已删除"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"删除分享失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"删除分享失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )

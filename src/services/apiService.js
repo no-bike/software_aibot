@@ -358,3 +358,25 @@ export const getUserSharedConversations = async () => {
     throw error;
   }
 };
+
+// 删除分享
+export const deleteShare = async (shareId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/shared/${shareId}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to delete share');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error deleting share:', error);
+    throw error;
+  }
+};

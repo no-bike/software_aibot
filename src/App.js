@@ -27,7 +27,9 @@ import {
   ThemeProvider,
   CssBaseline,
   AppBar,
-  Toolbar
+  Toolbar,
+  Snackbar,
+  Alert
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -51,7 +53,7 @@ import Login from './components/Login';
 import Register from './components/Register';
 import darkTheme from './theme/darkTheme';
 import lightTheme from './theme/lightTheme';
-import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation as deleteConversationAPI, getConversationDetail, updateConversationTitle, getUserSharedConversations } from './services/apiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation as deleteConversationAPI, getConversationDetail, updateConversationTitle, getUserSharedConversations, deleteShare } from './services/apiService';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ShareDialog from './components/ShareDialog';
 import SharedConversation from './components/SharedConversation';
@@ -80,6 +82,7 @@ const MainApp = () => {
   const [sharedConversations, setSharedConversations] = useState([]);
   const [sharedLink, setSharedLink] = useState('');
   const [sharedError, setSharedError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   // 从API加载模型列表
   useEffect(() => {
@@ -545,6 +548,18 @@ const MainApp = () => {
       setSharedError('');
     } catch (error) {
       setSharedError('无法打开分享的会话');
+    }
+  };
+
+  // 处理删除分享
+  const handleDeleteShare = async (shareId) => {
+    try {
+      await deleteShare(shareId);
+      // 重新加载分享列表
+      const data = await getUserSharedConversations();
+      setSharedConversations(data.sharedConversations || []);
+    } catch (error) {
+      setDeleteError('删除分享失败，请稍后重试');
     }
   };
 
@@ -1083,11 +1098,32 @@ const MainApp = () => {
                         <IconButton
                           edge="end"
                           onClick={() => {
-                            const shareUrl = `${window.location.origin}/shared/${shared.shareId}`;
-                            navigator.clipboard.writeText(shareUrl);
+                            const shareUrl = `${window.location.origin}/shared/${shared.id}`;
+                            navigator.clipboard.writeText(shareUrl)
+                              .then(() => {
+                                // 显示复制成功提示
+                                setSharedError('链接已复制到剪贴板');
+                                // 3秒后清除提示
+                                setTimeout(() => setSharedError(''), 3000);
+                              })
+                              .catch(() => {
+                                // 显示复制失败提示
+                                setSharedError('复制失败，请手动复制');
+                                // 3秒后清除提示
+                                setTimeout(() => setSharedError(''), 3000);
+                              });
                           }}
                         >
                           <ContentCopyIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="删除分享">
+                        <IconButton
+                          edge="end"
+                          onClick={() => handleDeleteShare(shared.id)}
+                          sx={{ ml: 1 }}
+                        >
+                          <DeleteIcon />
                         </IconButton>
                       </Tooltip>
                     </Box>
@@ -1190,6 +1226,17 @@ const MainApp = () => {
             </Button>
           </DialogActions>
         </Dialog>
+
+        {/* 删除错误提示 */}
+        <Snackbar
+          open={!!deleteError}
+          autoHideDuration={6000}
+          onClose={() => setDeleteError('')}
+        >
+          <Alert onClose={() => setDeleteError('')} severity="error">
+            {deleteError}
+          </Alert>
+        </Snackbar>
       </Box>
     </ThemeProvider>
   );
