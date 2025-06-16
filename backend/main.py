@@ -1,20 +1,29 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import httpx
 import os
 import asyncio
 import logging
 import traceback
-from services.deepseek_service import get_deepseek_response
-from services.sparkx1_service import get_sparkx1_response
-from services.moonshot_service import get_moonshot_response
-from services.qwen_service import get_qwen_response
+from services.deepseek_service import get_deepseek_response, get_deepseek_stream_response
+from services.sparkx1_service import get_sparkx1_response, get_sparkx1_stream_response
+from services.moonshot_service import get_moonshot_response, get_moonshot_stream_response
+from services.qwen_service import get_qwen_response, get_qwen_stream_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
+from services.mongodb_service import mongodb_service
+from services.auth_routes import router as auth_router
+
+# 北京时区
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+def get_beijing_time():
+    """获取北京时间"""
+    return datetime.now(BEIJING_TZ)
 
 # 配置日志
 logging.basicConfig(
@@ -25,16 +34,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# 配置CORS - 添加更多允许的头部和方法
+# 配置CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
-    max_age=3600,
 )
+
+# 添加认证路由
+app.include_router(auth_router, prefix="/api/auth", tags=["认证"])
 
 # 添加测试路由
 @app.get("/api/test")
@@ -77,6 +87,7 @@ class MessageRequest(BaseModel):
     message: str
     modelIds: List[str]
     conversationId: Optional[str] = None
+    userId: Optional[str] = "default_user"
 
 class FusionRequest(BaseModel):
     responses: List[Dict[str, str]]
@@ -89,6 +100,10 @@ class AdvancedFusionRequest(BaseModel):
     fusionMethod: Optional[str] = "rank_and_fuse"  # "rank_only", "fuse_only", "rank_and_fuse"
     topK: Optional[int] = 3
     conversationId: Optional[str] = None
+
+# 更新会话标题请求模型
+class UpdateTitleRequest(BaseModel):
+    title: str
 
 # 内存存储
 models = {}
@@ -121,6 +136,24 @@ default_models = [
 
 for model in default_models:
     models[model["id"]] = model
+
+# 启动时连接 MongoDB
+@app.on_event("startup")
+async def startup_event():
+    try:
+        await mongodb_service.connect()
+        logger.info("Application started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start application: {str(e)}")
+
+# 关闭时断开 MongoDB 连接
+@app.on_event("shutdown")
+async def shutdown_event():
+    try:
+        await mongodb_service.disconnect()
+        logger.info("Application shutdown successfully")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {str(e)}")
 
 
 @app.get("/api/models")
@@ -192,8 +225,13 @@ async def update_model_selection(model_ids: List[str]):
     return JSONResponse(content={"selected_models": selected_models})
 
 @app.post("/api/chat")
-async def chat(request: MessageRequest):
+async def chat(request: MessageRequest, req: Request):
     try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="未登录或会话已过期")
+            
         logger.info(f"收到聊天请求: {request.dict()}")
         
         if not request.modelIds:
@@ -223,41 +261,283 @@ async def chat(request: MessageRequest):
         # 获取或创建会话
         conversation = None
         if request.conversationId:
-            if request.conversationId not in conversations:
-                logger.info(f"创建新会话: {request.conversationId}")
-                conversations[request.conversationId] = {
+            conversation = await mongodb_service.get_user_conversation_with_messages(
+                user_id, request.conversationId
+            )
+            if not conversation:
+                logger.info(f"创建新会话: {request.conversationId} for user {user_id}")
+                conversation = {
                     "id": request.conversationId,
-                    "title": f"对话 {len(conversations) + 1}",
+                    "title": request.message[:30] + "..." if len(request.message) > 30 else request.message,  # 使用用户的第一条消息作为标题
                     "messages": [],
-                    "models": request.modelIds
+                    "models": request.modelIds,
+                    "createdAt": get_beijing_time().isoformat(),
+                    "userId": user_id  # 使用从 cookie 获取的用户 ID
                 }
-            conversation = conversations[request.conversationId]
-            logger.info(f"当前会话信息: {conversation}")
-        
-        # 添加用户消息
+                # 保存到 MongoDB
+                await mongodb_service.save_conversation(conversation, user_id)
+            logger.info(f"当前会话信息: 消息数量={len(conversation.get('messages', []))}")
+          # 添加用户消息
         user_message = {
             "content": request.message,
             "role": "user",
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": get_beijing_time().isoformat()
         }
         
+        # 保存用户消息到 MongoDB
         if conversation:
+            await mongodb_service.save_message(request.conversationId, user_message, user_id)
             conversation["messages"].append(user_message)
             logger.info(f"添加用户消息到会话: {user_message}")
         
-        # 获取AI响应
+        # 单个模型时使用流式响应
+        if len(request.modelIds) == 1:
+            model_id = request.modelIds[0]
+            try:
+                # 准备会话历史 - 从 MongoDB 获取最近的消息
+                history = []
+                if conversation:
+                    # 从 MongoDB 获取会话历史，限制最近 6 条消息
+                    recent_messages = await mongodb_service.get_conversation_history(
+                        request.conversationId, user_id, limit=6
+                    )
+                    
+                    # 排除刚刚添加的用户消息
+                    for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
+                        if msg["role"] in ["user", "assistant"]:
+                            history.append({
+                                "role": msg["role"],
+                                "content": msg["content"]
+                            })
+                    logger.info(f"会话历史 (最近{len(history)}条): 已加载")
+                
+                logger.info(f"正在流式调用模型 {model_id} 的API")
+                
+                if model_id == "deepseek-chat":
+                    # 创建一个包装的流式生成器，在结束后保存消息
+                    async def stream_with_save():
+                        collected_content = ""
+                        chunk_count = 0
+                        async for chunk in get_deepseek_stream_response(request.message, history):
+                            chunk_count += 1
+                            # 解析SSE格式的数据，提取content
+                            lines = chunk.strip().split('\n')
+                            for line in lines:
+                                if line.startswith('data: '):
+                                    data_str = line[6:].strip()
+                                    if data_str and data_str != '[DONE]':
+                                        try:
+                                            import json
+                                            data = json.loads(data_str)
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    collected_content += delta['content']
+                                        except json.JSONDecodeError:
+                                            # 如果不是JSON格式，可能是原始文本，直接添加
+                                            if not data_str.startswith('data:') and data_str:
+                                                collected_content += data_str
+                                        except Exception as e:
+                                            logger.debug(f"解析流数据块失败: {e}")
+                            yield chunk
+                        
+                        # 流式响应结束后保存AI回复
+                        if collected_content.strip() and conversation:
+                            ai_message = {
+                                "content": collected_content.strip(),
+                                "role": "assistant",
+                                "model": model_id,
+                                "timestamp": get_beijing_time().isoformat()
+                            }
+                            try:
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
+                            except Exception as e:
+                                logger.error(f"保存AI响应失败: {e}")
+                        else:
+                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
+                    
+                    return StreamingResponse(
+                        stream_with_save(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                elif model_id == "sparkx1":
+                    # 创建一个包装的流式生成器，在结束后保存消息
+                    async def stream_with_save_sparkx1():
+                        collected_content = ""
+                        chunk_count = 0
+                        async for chunk in get_sparkx1_stream_response(request.message, history):
+                            chunk_count += 1
+                            # 解析SSE格式的数据，提取content
+                            lines = chunk.strip().split('\n')
+                            for line in lines:
+                                if line.startswith('data: '):
+                                    data_str = line[6:].strip()
+                                    if data_str and data_str != '[DONE]':
+                                        try:
+                                            import json
+                                            data = json.loads(data_str)
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    collected_content += delta['content']
+                                        except json.JSONDecodeError:
+                                            # 如果不是JSON格式，可能是原始文本，直接添加
+                                            if not data_str.startswith('data:') and data_str:
+                                                collected_content += data_str
+                                        except Exception as e:
+                                            logger.debug(f"解析流数据块失败: {e}")
+                            yield chunk
+                        
+                        # 流式响应结束后保存AI回复
+                        if collected_content.strip() and conversation:
+                            ai_message = {
+                                "content": collected_content.strip(),
+                                "role": "assistant", 
+                                "model": model_id,
+                                "timestamp": get_beijing_time().isoformat()
+                            }
+                            try:
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
+                            except Exception as e:
+                                logger.error(f"保存AI响应失败: {e}")
+                        else:
+                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
+                    
+                    return StreamingResponse(
+                        stream_with_save_sparkx1(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                elif model_id == "moonshot":
+                    api_config = models.get(model_id)
+                    if not api_config:
+                        raise HTTPException(status_code=400, detail="Moonshot模型未配置")
+                    # 创建一个包装的流式生成器，在结束后保存消息
+                    async def stream_with_save_moonshot():
+                        collected_content = ""
+                        chunk_count = 0
+                        async for chunk in get_moonshot_stream_response(request.message, history, api_config):
+                            chunk_count += 1
+                            # 解析SSE格式的数据，提取content
+                            lines = chunk.strip().split('\n')
+                            for line in lines:
+                                if line.startswith('data: '):
+                                    data_str = line[6:].strip()
+                                    if data_str and data_str != '[DONE]':
+                                        try:
+                                            import json
+                                            data = json.loads(data_str)
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    collected_content += delta['content']
+                                        except json.JSONDecodeError:
+                                            # 如果不是JSON格式，可能是原始文本，直接添加
+                                            if not data_str.startswith('data:') and data_str:
+                                                collected_content += data_str
+                                        except Exception as e:
+                                            logger.debug(f"解析流数据块失败: {e}")
+                            yield chunk
+                        
+                        # 流式响应结束后保存AI回复
+                        if collected_content.strip() and conversation:
+                            ai_message = {
+                                "content": collected_content.strip(),
+                                "role": "assistant",
+                                "model": model_id,
+                                "timestamp": get_beijing_time().isoformat()
+                            }
+                            try:
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
+                            except Exception as e:
+                                logger.error(f"保存AI响应失败: {e}")
+                        else:
+                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
+                    
+                    return StreamingResponse(
+                        stream_with_save_moonshot(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                else:
+                    # 其他模型暂时保持原样
+                    response_content = None
+                    if model_id == "moonshot":
+                        api_config = models.get(model_id)
+                        if not api_config:
+                            raise HTTPException(status_code=400, detail="Moonshot模型未配置")
+                        response_content = await get_moonshot_response(request.message, history, api_config)
+                    else:
+                        raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
+                    
+                    response = {
+                        "modelId": model_id,
+                        "content": response_content                    }
+                    
+                    if conversation:
+                        ai_message = {
+                            "content": response_content,
+                            "role": "assistant",
+                            "model": model_id,
+                            "timestamp": get_beijing_time().isoformat()
+                        }
+                        conversation["messages"].append(ai_message)
+                        # 保存AI响应到 MongoDB
+                        await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                        logger.info(f"AI响应已保存到MongoDB: {model_id}")
+                    
+                    return JSONResponse(
+                        status_code=200,
+                        content={"responses": [response]},
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
+                    
+            except Exception as e:
+                error_msg = f"处理模型 {model_id} 的响应时发生错误: {str(e)}\n{traceback.format_exc()}"
+                logger.error(error_msg)
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": error_msg},
+                    headers={
+                        "Access-Control-Allow-Origin": "http://localhost:3000",
+                        "Access-Control-Allow-Credentials": "true"
+                    }
+                )        # 多个模型时保持原有逻辑
         responses = []
         for model_id in request.modelIds:
             try:
-                # 准备会话历史
+                # 准备会话历史 - 从 MongoDB 获取最近的消息
                 history = []
                 if conversation:
-                    for msg in conversation["messages"][:-1]:  # 不包含刚刚添加的用户消息
-                        history.append({
-                            "role": msg["role"],
-                            "content": msg["content"]
-                        })
-                    logger.info(f"会话历史: {history}")
+                    # 从 MongoDB 获取会话历史，限制最近 6 条消息
+                    recent_messages = await mongodb_service.get_conversation_history(
+                        request.conversationId, user_id, limit=6
+                    )
+                    
+                    # 排除刚刚添加的用户消息
+                    for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
+                        if msg["role"] in ["user", "assistant"]:
+                            history.append({
+                                "role": msg["role"],
+                                "content": msg["content"]
+                            })
+                    logger.info(f"会话历史 (最近{len(history)}条): 已加载")
                 
                 logger.info(f"正在调用模型 {model_id} 的API")
                 response_content = None
@@ -266,7 +546,6 @@ async def chat(request: MessageRequest):
                 elif model_id == "sparkx1":
                     response_content = await get_sparkx1_response(request.message, history)
                 elif model_id == "moonshot":
-                    # 获取moonshot的API配置
                     api_config = models.get(model_id)
                     if not api_config:
                         raise HTTPException(status_code=400, detail="Moonshot模型未配置")
@@ -275,6 +554,7 @@ async def chat(request: MessageRequest):
                     response_content = await get_qwen_response(request.message, history)
                 else:
                     raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
+                
                 logger.info(f"收到AI响应: {response_content}")
                 
                 response = {
@@ -282,16 +562,16 @@ async def chat(request: MessageRequest):
                     "content": response_content
                 }
                 responses.append(response)
-                
+                  # 保存AI响应到 MongoDB
                 if conversation:
-                    # 添加AI响应到会话
                     ai_message = {
                         "content": response_content,
                         "role": "assistant",
-                        "timestamp": datetime.utcnow().isoformat()
+                        "model": model_id,
+                        "timestamp": get_beijing_time().isoformat()
                     }
-                    conversation["messages"].append(ai_message)
-                    logger.info(f"添加AI响应到会话: {ai_message}")
+                    await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                    logger.info(f"AI响应已保存到MongoDB: {model_id}")
                     
             except Exception as e:
                 error_msg = f"处理模型 {model_id} 的响应时发生错误: {str(e)}\n{traceback.format_exc()}"
@@ -330,7 +610,7 @@ async def chat(request: MessageRequest):
         )
 
 @app.post("/api/fusion")
-async def fusion_response(request: FusionRequest):
+async def fusion_response(request: FusionRequest, req: Request):
     try:
         logger.info(f"收到融合请求: {request.dict()}")
         
@@ -344,28 +624,39 @@ async def fusion_response(request: FusionRequest):
                 }
             )
         
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id", "default_user")
+        
         # 获取会话历史（如果有）
         history = []
-        if request.conversationId and request.conversationId in conversations:
-            conversation = conversations[request.conversationId]
-            history = [
-                {"role": msg["role"], "content": msg["content"]}
-                for msg in conversation["messages"][:-1]  # 不包括最新的用户消息
-            ]
+        if request.conversationId:
+            # 从 MongoDB 获取会话历史
+            recent_messages = await mongodb_service.get_conversation_history(
+                request.conversationId, user_id, limit=6
+            )
+            # 排除刚刚添加的用户消息
+            for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
+                if msg["role"] in ["user", "assistant"]:
+                    history.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+            logger.info(f"会话历史 (最近{len(history)}条): 已加载")
         
         # 调用融合服务
         fused_content = await get_fusion_response(request.responses, history)
         
-        # 如果存在会话ID，将融合结果添加到会话历史
-        if request.conversationId and request.conversationId in conversations:
+        # 如果存在会话ID，将融合结果保存到 MongoDB
+        if request.conversationId:
             fusion_message = {
                 "content": fused_content,
                 "role": "assistant",
                 "model": "fusion",
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": get_beijing_time().isoformat()
             }
-            conversations[request.conversationId]["messages"].append(fusion_message)
-            logger.info(f"添加融合回答到会话: {fusion_message}")
+            # 保存融合回答到 MongoDB
+            await mongodb_service.save_message(request.conversationId, fusion_message, user_id)
+            logger.info(f"融合回答已保存到MongoDB: {fusion_message}")
         
         return JSONResponse(
             status_code=200,
@@ -389,7 +680,7 @@ async def fusion_response(request: FusionRequest):
         )
 
 @app.post("/api/fusion/advanced")
-async def advanced_fusion_response(request: AdvancedFusionRequest):
+async def advanced_fusion_response(request: AdvancedFusionRequest, req: Request):
     """
     高级融合接口 - 使用 LLM-Blender 进行智能融合
     
@@ -411,6 +702,9 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
                 }
             )
         
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id", "default_user")
+        
         # 转换响应格式以匹配服务接口
         formatted_responses = []
         for resp in request.responses:
@@ -420,21 +714,21 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
             })
         
         # 调用高级融合服务
-        start_time = datetime.utcnow()
+        start_time = get_beijing_time()
         result = await get_advanced_fusion_response_direct(
             query=request.query,
             responses=formatted_responses,
             fusion_method=request.fusionMethod,
             top_k=request.topK
         )
-        end_time = datetime.utcnow()
+        end_time = get_beijing_time()
         
         # 计算处理时间
         processing_time = (end_time - start_time).total_seconds()
         result["processing_time"] = processing_time
         
-        # 如果存在会话ID，将融合结果添加到会话历史
-        if request.conversationId and request.conversationId in conversations:
+        # 如果存在会话ID，将融合结果保存到 MongoDB
+        if request.conversationId:
             fusion_message = {
                 "content": result["fused_content"],
                 "role": "assistant",
@@ -443,8 +737,9 @@ async def advanced_fusion_response(request: AdvancedFusionRequest):
                 "models_used": result.get("models_used", []),
                 "timestamp": end_time.isoformat()
             }
-            conversations[request.conversationId]["messages"].append(fusion_message)
-            logger.info(f"添加高级融合回答到会话: {fusion_message}")
+            # 保存高级融合回答到 MongoDB
+            await mongodb_service.save_message(request.conversationId, fusion_message, user_id)
+            logger.info(f"高级融合回答已保存到MongoDB: {fusion_message}")
         
         logger.info(f"✅ 高级融合完成，方法: {result.get('fusion_method')}, 耗时: {processing_time:.2f}s")
         
@@ -581,6 +876,250 @@ async def delete_model(model_id: str):
         return JSONResponse(
             status_code=500,
             content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取所有会话列表
+@app.get("/api/conversations")
+async def get_conversations(request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        conversations = await mongodb_service.get_all_conversations(user_id)
+        return JSONResponse(
+            content={"conversations": conversations},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取会话列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取会话列表失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 删除会话
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str, request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        success = await mongodb_service.delete_user_conversation(user_id, conversation_id)
+        if success:
+            return JSONResponse(
+                content={"message": "会话删除成功"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在或无权访问"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"删除会话失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"删除会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 更新会话标题
+@app.put("/api/conversations/{conversation_id}/title")
+async def update_conversation_title(conversation_id: str, request: UpdateTitleRequest, req: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id", "default_user")
+        success = await mongodb_service.update_conversation_title(
+            conversation_id, request.title, user_id
+        )
+        if success:
+            return JSONResponse(
+                content={"message": "标题更新成功"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"更新会话标题失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"更新会话标题失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取单个会话详情
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation_detail(conversation_id: str, request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        conversation = await mongodb_service.get_conversation(conversation_id, user_id)
+        if conversation:
+            return JSONResponse(
+                content={"conversation": conversation},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在或无权访问"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"获取会话详情失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取会话详情失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取特定用户的会话列表
+@app.get("/api/users/{user_id}/conversations")
+async def get_user_conversations(user_id: str):
+    try:
+        conversations = await mongodb_service.get_user_conversations(user_id)
+        return JSONResponse(
+            content={"conversations": conversations},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取用户会话列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户会话列表失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取特定用户的会话详情（包含消息）
+@app.get("/api/users/{user_id}/conversations/{conversation_id}")
+async def get_user_conversation_detail(user_id: str, conversation_id: str):
+    try:
+        conversation = await mongodb_service.get_user_conversation_with_messages(user_id, conversation_id)
+        if conversation:
+            return JSONResponse(
+                content={"conversation": conversation},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在或您没有权限访问"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"获取用户会话详情失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户会话详情失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 删除特定用户的会话
+@app.delete("/api/users/{user_id}/conversations/{conversation_id}")
+async def delete_user_conversation(user_id: str, conversation_id: str):
+    try:
+        success = await mongodb_service.delete_user_conversation(user_id, conversation_id)
+        if success:
+            return JSONResponse(
+                content={"message": "会话删除成功"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在或您没有权限删除"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"删除用户会话失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"删除用户会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取用户统计信息
+@app.get("/api/users/{user_id}/stats")
+async def get_user_stats(user_id: str):
+    try:
+        stats = await mongodb_service.get_user_statistics(user_id)
+        return JSONResponse(
+            content={"stats": stats},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取用户统计信息失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户统计信息失败: {str(e)}"},
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"
