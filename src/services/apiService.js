@@ -293,3 +293,68 @@ export const deleteConversation = async (conversationId) => {
     throw error;
   }
 };
+
+// 分享会话
+export const shareConversation = async (conversationId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/share`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to share conversation');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error sharing conversation:', error);
+    throw error;
+  }
+};
+
+// 获取分享的会话
+export const getSharedConversation = async (shareId) => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/shared/${shareId}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch shared conversation');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching shared conversation:', error);
+    throw error;
+  }
+};
+
+// 获取用户分享的所有会话
+export const getUserSharedConversations = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/shared`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      credentials: 'include'
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch shared conversations');
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching shared conversations:', error);
+    throw error;
+  }
+};
