@@ -54,6 +54,13 @@ class MongoDBService:
             await self.db.messages.create_index("conversation_id")
             await self.db.messages.create_index("timestamp")
             await self.db.messages.create_index([("conversation_id", 1), ("timestamp", 1)])
+            
+            # 为分享集合创建索引
+            await self.db.shares.create_index("share_id", unique=True)
+            await self.db.shares.create_index("user_id")
+            await self.db.shares.create_index("conversation_id")
+            await self.db.shares.create_index("created_at")
+            
             logger.info("Database indexes created successfully")
         except Exception as e:
             logger.error(f"Failed to create indexes: {str(e)}")
@@ -465,6 +472,116 @@ class MongoDBService:
         except Exception as e:
             logger.error(f"停用用户失败: {str(e)}")
             return False
+
+    async def create_share(self, conversation_id: str, user_id: str) -> Optional[Dict]:
+        """创建会话分享"""
+        try:
+            # 生成唯一的分享ID
+            share_id = str(ObjectId())
+            
+            # 创建分享文档
+            share_doc = {
+                "share_id": share_id,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "created_at": get_beijing_time().isoformat(),
+                "is_active": True
+            }
+            
+            # 插入分享记录
+            result = await self.db.shares.insert_one(share_doc)
+            
+            if result.inserted_id:
+                return {
+                    "shareId": share_id,
+                    "conversationId": conversation_id,
+                    "createdAt": share_doc["created_at"]
+                }
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to create share: {str(e)}")
+            return None
+    
+    async def get_shared_conversation(self, share_id: str) -> Optional[Dict]:
+        """获取分享的会话内容"""
+        try:
+            # 获取分享记录
+            share = await self.db.shares.find_one({"share_id": share_id})
+            if not share:
+                return None
+            
+            # 获取会话内容
+            conversation = await self.get_conversation(share["conversation_id"], share["user_id"])
+            if not conversation:
+                return None
+            
+            # 获取分享用户信息
+            user = await self.db.users.find_one({"_id": ObjectId(share["user_id"])})
+            user_info = {
+                "id": str(user["_id"]),
+                "username": user.get("username", "未知用户"),
+                "email": user.get("email", "")
+            } if user else {"username": "未知用户"}
+            
+            return {
+                "conversation": conversation,
+                "shareId": share_id,
+                "createdAt": share["created_at"],
+                "sharedBy": user_info
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get shared conversation: {str(e)}")
+            return None
+    
+    async def get_user_shares(self, user_id: str) -> List[Dict]:
+        """获取用户的所有分享"""
+        try:
+            shares = []
+            cursor = self.db.shares.find({"user_id": user_id}).sort("created_at", -1)
+            
+            async for share in cursor:
+                # 获取会话标题
+                conversation = await self.db.conversations.find_one(
+                    {"conversation_id": share["conversation_id"]},
+                    {"title": 1}
+                )
+                
+                shares.append({
+                    "id": share["share_id"],
+                    "conversationId": share["conversation_id"],
+                    "title": conversation.get("title", "未命名会话") if conversation else "未命名会话",
+                    "createdAt": share["created_at"]
+                })
+            
+            return shares
+            
+        except Exception as e:
+            logger.error(f"Failed to get user shares: {str(e)}")
+            return []
+    
+    async def deactivate_share(self, share_id: str, user_id: str) -> bool:
+        """删除分享"""
+        try:
+            result = await self.db.shares.delete_one(
+                {"share_id": share_id, "user_id": user_id}
+            )
+            return result.deleted_count > 0
+        except Exception as e:
+            logger.error(f"Failed to delete share: {str(e)}")
+            return False
+
+    async def get_user_by_id(self, user_id: str) -> Optional[dict]:
+        """通过用户ID获取用户信息"""
+        try:
+            user = await self.db.users.find_one({"_id": ObjectId(user_id)})
+            if user:
+                return user
+            return None
+        except Exception as e:
+            logger.error(f"获取用户信息失败: {str(e)}")
+            return None
 
 # 全局 MongoDB 服务实例
 mongodb_service = MongoDBService()

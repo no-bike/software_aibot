@@ -472,6 +472,58 @@ async def chat(request: MessageRequest, req: Request):
                             "Access-Control-Allow-Credentials": "true"
                         }
                     )
+                elif model_id == "qwen":
+                    # 创建一个包装的流式生成器，在结束后保存消息
+                    async def stream_with_save_qwen():
+                        collected_content = ""
+                        chunk_count = 0
+                        async for chunk in get_qwen_stream_response(request.message, history):
+                            chunk_count += 1
+                            # 解析SSE格式的数据，提取content
+                            lines = chunk.strip().split('\n')
+                            for line in lines:
+                                if line.startswith('data: '):
+                                    data_str = line[6:].strip()
+                                    if data_str and data_str != '[DONE]':
+                                        try:
+                                            import json
+                                            data = json.loads(data_str)
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                if 'content' in delta:
+                                                    collected_content += delta['content']
+                                        except json.JSONDecodeError:
+                                            # 如果不是JSON格式，可能是原始文本，直接添加
+                                            if not data_str.startswith('data:') and data_str:
+                                                collected_content += data_str
+                                        except Exception as e:
+                                            logger.debug(f"解析流数据块失败: {e}")
+                            yield chunk
+                        
+                        # 流式响应结束后保存AI回复
+                        if collected_content.strip() and conversation:
+                            ai_message = {
+                                "content": collected_content.strip(),
+                                "role": "assistant",
+                                "model": model_id,
+                                "timestamp": get_beijing_time().isoformat()
+                            }
+                            try:
+                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
+                            except Exception as e:
+                                logger.error(f"保存AI响应失败: {e}")
+                        else:
+                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
+                    
+                    return StreamingResponse(
+                        stream_with_save_qwen(),
+                        media_type="text/event-stream",
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
                 else:
                     # 其他模型暂时保持原样
                     response_content = None
@@ -480,6 +532,8 @@ async def chat(request: MessageRequest, req: Request):
                         if not api_config:
                             raise HTTPException(status_code=400, detail="Moonshot模型未配置")
                         response_content = await get_moonshot_response(request.message, history, api_config)
+                    elif model_id == "qwen":
+                        response_content = await get_qwen_response(request.message, history)
                     else:
                         raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
                     
@@ -1120,6 +1174,205 @@ async def get_user_stats(user_id: str):
         return JSONResponse(
             status_code=500,
             content={"detail": f"获取用户统计信息失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 分享会话
+@app.post("/api/conversations/{conversation_id}/share")
+async def share_conversation(conversation_id: str, request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        
+        # 验证会话是否存在且属于该用户
+        conversation = await mongodb_service.get_conversation(conversation_id, user_id)
+        if not conversation:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在或无权访问"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 创建分享
+        share_result = await mongodb_service.create_share(conversation_id, user_id)
+        if not share_result:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "创建分享失败"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content=share_result,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"分享会话失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"分享会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取分享的会话
+@app.get("/api/shared/{share_id}")
+async def get_shared_conversation(share_id: str):
+    try:
+        shared_data = await mongodb_service.get_shared_conversation(share_id)
+        if not shared_data:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "分享的会话不存在或已失效"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content=shared_data,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取分享的会话失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取分享的会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取用户分享的所有会话
+@app.get("/api/shared")
+async def get_user_shares(request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        
+        shares = await mongodb_service.get_user_shares(user_id)
+        return JSONResponse(
+            content={"sharedConversations": shares},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取用户分享列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户分享列表失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 删除分享
+@app.delete("/api/shared/{share_id}")
+async def delete_share(share_id: str, request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        
+        # 删除分享
+        result = await mongodb_service.deactivate_share(share_id, user_id)
+        if not result:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "分享不存在或无权删除"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content={"detail": "分享已删除"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"删除分享失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"删除分享失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取当前用户信息
+@app.get("/api/users/me")
+async def get_current_user(request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id")
+        if not user_id:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "未登录"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 从数据库获取用户信息
+        user = await mongodb_service.get_user_by_id(user_id)
+        if not user:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "用户不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content={
+                "id": str(user["_id"]),
+                "username": user.get("username", ""),
+                "email": user.get("email", "")
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取用户信息失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户信息失败: {str(e)}"},
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"

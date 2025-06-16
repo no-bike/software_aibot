@@ -28,7 +28,9 @@ import {
   ThemeProvider,
   CssBaseline,
   AppBar,
-  Toolbar
+  Toolbar,
+  Snackbar,
+  Alert
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -43,13 +45,19 @@ import SettingsIcon from '@mui/icons-material/Settings';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import LogoutIcon from '@mui/icons-material/Logout';
+import ShareIcon from '@mui/icons-material/Share';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import ShareListIcon from '@mui/icons-material/List';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import Register from './components/Register';
 import darkTheme from './theme/darkTheme';
 import lightTheme from './theme/lightTheme';
-import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation as deleteConversationAPI, getConversationDetail, updateConversationTitle } from './services/apiService';
+import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses, getConversations, deleteConversation as deleteConversationAPI, getConversationDetail, updateConversationTitle, getUserSharedConversations, deleteShare } from './services/apiService';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import ShareDialog from './components/ShareDialog';
+import SharedConversation from './components/SharedConversation';
 
 // 跳动点动画
 const bounce = keyframes`
@@ -122,6 +130,13 @@ const MainApp = () => {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const messagesEndRef = useRef(null);
   const [streamingContent, setStreamingContent] = useState('');
+  const [showShareDialog, setShowShareDialog] = useState(false);
+  const [showSharedList, setShowSharedList] = useState(false);
+  const [showViewSharedDialog, setShowViewSharedDialog] = useState(false);
+  const [sharedConversations, setSharedConversations] = useState([]);
+  const [sharedLink, setSharedLink] = useState('');
+  const [sharedError, setSharedError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
 
   // 从API加载模型列表
   useEffect(() => {
@@ -555,6 +570,58 @@ const MainApp = () => {
     }
   };
 
+  // 加载分享的会话列表
+  useEffect(() => {
+    const loadSharedConversations = async () => {
+      try {
+        const data = await getUserSharedConversations();
+        setSharedConversations(data.sharedConversations || []);
+      } catch (error) {
+        console.error('Error loading shared conversations:', error);
+      }
+    };
+
+    if (showSharedList) {
+      loadSharedConversations();
+    }
+  }, [showSharedList]);
+
+  // 处理查看分享的会话
+  const handleViewShared = async () => {
+    if (!sharedLink.trim()) {
+      setSharedError('请输入分享链接');
+      return;
+    }
+
+    try {
+      // 从链接中提取分享ID
+      const shareId = sharedLink.split('/shared/')[1];
+      if (!shareId) {
+        setSharedError('无效的分享链接');
+        return;
+      }
+
+      // 在新窗口打开分享的会话
+      window.open(`/shared/${shareId}`, '_blank');
+      setShowViewSharedDialog(false);
+      setSharedLink('');
+      setSharedError('');
+    } catch (error) {
+      setSharedError('无法打开分享的会话');
+    }
+  };
+
+  // 处理删除分享
+  const handleDeleteShare = async (shareId) => {
+    try {
+      await deleteShare(shareId);
+      // 重新加载分享列表
+      const data = await getUserSharedConversations();
+      setSharedConversations(data.sharedConversations || []);
+    } catch (error) {
+      setDeleteError('删除分享失败，请稍后重试');
+    }
+  };
   return (
     <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
       <CssBaseline />
@@ -564,6 +631,21 @@ const MainApp = () => {
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               AI 助手
             </Typography>
+            {user && (
+              <Typography variant="body2" color="inherit" sx={{ mr: 2 }}>
+                用户名: {user.username || '未知'}
+              </Typography>
+            )}
+            <Tooltip title="查看分享的会话">
+              <IconButton color="inherit" onClick={() => setShowViewSharedDialog(true)}>
+                <VisibilityIcon />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="我的分享列表">
+              <IconButton color="inherit" onClick={() => setShowSharedList(true)}>
+                <ShareListIcon />
+              </IconButton>
+            </Tooltip>
             <IconButton color="inherit" onClick={logout}>
               <LogoutIcon />
             </IconButton>
@@ -679,7 +761,21 @@ const MainApp = () => {
                             onClick={() => selectConversation(conv.id)}
                             secondaryAction={
                               <Box>
-                                <Tooltip title="Edit Title">
+                                <Tooltip title="分享会话">
+                                  <IconButton
+                                    edge="end"
+                                    aria-label="share"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCurrentConversationId(conv.id);
+                                      setShowShareDialog(true);
+                                    }}
+                                    size="small"
+                                  >
+                                    <ShareIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                                <Tooltip title="编辑标题">
                                   <IconButton
                                     edge="end"
                                     aria-label="edit"
@@ -692,7 +788,7 @@ const MainApp = () => {
                                     <EditIcon fontSize="small" />
                                   </IconButton>
                                 </Tooltip>
-                                <Tooltip title="Delete Conversation">
+                                <Tooltip title="删除会话">
                                   <IconButton 
                                     edge="end" 
                                     aria-label="delete"
@@ -998,20 +1094,26 @@ const MainApp = () => {
                     <Box sx={{ display: 'flex', gap: 1 }}>
                       <TextField
                         fullWidth
-                        variant="outlined"
-                        placeholder="Type your message..."
+                        multiline
+                        maxRows={4}
                         value={message}
                         onChange={(e) => setMessage(e.target.value)}
-                        onKeyPress={(e) => e.key === 'Enter' && !isLoadingResponse && handleSend()}
+                        placeholder="输入消息..."
+                        onKeyPress={(e) => {
+                          if (e.key === 'Enter' && !e.shiftKey && !isLoadingResponse) {
+                            e.preventDefault();
+                            handleSend();
+                          }
+                        }}
                         disabled={isLoadingResponse}
                       />
                       <Button
                         variant="contained"
-                        endIcon={<SendIcon />}
                         onClick={handleSend}
                         disabled={isLoadingResponse || !message.trim()}
+                        endIcon={<SendIcon />}
                       >
-                        {isLoadingResponse ? '发送中...' : 'Send'}
+                        {isLoadingResponse ? '发送中...' : '发送'}
                       </Button>
                     </Box>
                   </>
@@ -1045,6 +1147,172 @@ const MainApp = () => {
             <Button onClick={saveEditTitle} variant="contained">Save</Button>
           </DialogActions>
         </Dialog>
+
+        {/* 分享对话框 */}
+        <ShareDialog
+          open={showShareDialog}
+          onClose={() => setShowShareDialog(false)}
+          conversationId={currentConversationId}
+        />
+
+        {/* 分享列表对话框 */}
+        <Dialog
+          open={showSharedList}
+          onClose={() => setShowSharedList(false)}
+          maxWidth="md"
+          fullWidth
+        >
+          <DialogTitle>我的分享</DialogTitle>
+          <DialogContent>
+            <List>
+              {sharedConversations.map((shared) => (
+                <ListItem
+                  key={shared.id}
+                  secondaryAction={
+                    <Box>
+                      <Tooltip title="复制链接">
+                        <IconButton
+                          edge="end"
+                          onClick={() => {
+                            const shareUrl = `${window.location.origin}/shared/${shared.id}`;
+                            navigator.clipboard.writeText(shareUrl)
+                              .then(() => {
+                                // 显示复制成功提示
+                                setSharedError('链接已复制到剪贴板');
+                                // 3秒后清除提示
+                                setTimeout(() => setSharedError(''), 3000);
+                              })
+                              .catch(() => {
+                                // 显示复制失败提示
+                                setSharedError('复制失败，请手动复制');
+                                // 3秒后清除提示
+                                setTimeout(() => setSharedError(''), 3000);
+                              });
+                          }}
+                        >
+                          <ContentCopyIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="删除分享">
+                        <IconButton
+                          edge="end"
+                          onClick={() => handleDeleteShare(shared.id)}
+                          sx={{ ml: 1 }}
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  }
+                >
+                  <ListItemText
+                    primary={shared.title || '未命名会话'}
+                    secondary={`分享时间: ${new Date(shared.createdAt).toLocaleString()}`}
+                  />
+                </ListItem>
+              ))}
+              {sharedConversations.length === 0 && (
+                <ListItem>
+                  <ListItemText
+                    primary="暂无分享的会话"
+                    sx={{ textAlign: 'center', color: 'text.secondary' }}
+                  />
+                </ListItem>
+              )}
+            </List>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setShowSharedList(false)}>关闭</Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* 查看分享会话对话框 */}
+        <Dialog
+          open={showViewSharedDialog}
+          onClose={() => {
+            setShowViewSharedDialog(false);
+            setSharedLink('');
+            setSharedError('');
+          }}
+          maxWidth="sm"
+          fullWidth
+        >
+          <DialogTitle sx={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 1,
+            borderBottom: 1,
+            borderColor: 'divider',
+            pb: 2
+          }}>
+            <VisibilityIcon color="primary" />
+            查看分享的会话
+          </DialogTitle>
+          <DialogContent>
+            <Box sx={{ mt: 2 }}>
+              <Paper 
+                elevation={0} 
+                sx={{ 
+                  p: 3,
+                  backgroundColor: 'background.default',
+                  borderRadius: 2
+                }}
+              >
+                <Typography variant="subtitle1" gutterBottom>
+                  输入分享链接
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                  <TextField
+                    fullWidth
+                    value={sharedLink}
+                    onChange={(e) => setSharedLink(e.target.value)}
+                    placeholder="请输入分享链接"
+                    error={!!sharedError}
+                    helperText={sharedError}
+                    sx={{
+                      '& .MuiOutlinedInput-root': {
+                        backgroundColor: 'background.paper'
+                      }
+                    }}
+                  />
+                </Box>
+                <Typography variant="body2" color="text.secondary">
+                  输入其他用户分享的会话链接，即可查看会话内容
+                </Typography>
+              </Paper>
+            </Box>
+          </DialogContent>
+          <DialogActions sx={{ px: 3, py: 2, borderTop: 1, borderColor: 'divider' }}>
+            <Button 
+              onClick={() => {
+                setShowViewSharedDialog(false);
+                setSharedLink('');
+                setSharedError('');
+              }} 
+              variant="outlined"
+            >
+              取消
+            </Button>
+            <Button 
+              onClick={handleViewShared} 
+              variant="contained"
+              disabled={!sharedLink.trim()}
+            >
+              查看
+            </Button>
+          </DialogActions>
+        </Dialog>
+
+        {/* 删除错误提示 */}
+        <Snackbar
+          open={!!deleteError}
+          autoHideDuration={6000}
+          onClose={() => setDeleteError('')}
+        >
+          <Alert onClose={() => setDeleteError('')} severity="error">
+            {deleteError}
+          </Alert>
+        </Snackbar>
       </Box>
     </ThemeProvider>
   );
@@ -1052,32 +1320,25 @@ const MainApp = () => {
 
 // 主应用组件
 const App = () => {
-  const [showLogin, setShowLogin] = useState(true);
+  const [isLogin, setIsLogin] = useState(false);
+  const [isRegister, setIsRegister] = useState(false);
   const { user } = useAuth();
 
-  const handleLoginSuccess = (isLogin) => {
-    if (!isLogin) {
-      // 只有在需要切换到注册页面时才设置
-      setShowLogin(false);
-    }
-  };
+  // 检查URL是否包含分享ID
+  const shareId = window.location.pathname.split('/shared/')[1];
 
-  const handleRegisterSuccess = () => {
-    // 注册成功后切换到登录页面
-    setShowLogin(true);
-  };
-
-  // 如果用户已登录，直接显示主应用
-  if (user) {
-    return <MainApp />;
+  if (shareId) {
+    return <SharedConversation shareId={shareId} />;
   }
 
-  // 未登录时显示登录或注册页面
-  return showLogin ? (
-    <Login onLoginSuccess={handleLoginSuccess} />
-  ) : (
-    <Register onRegisterSuccess={handleRegisterSuccess} />
-  );
+  if (!user) {
+    if (isRegister) {
+      return <Register onRegisterSuccess={() => setIsRegister(false)} />;
+    }
+    return <Login onLoginSuccess={() => setIsLogin(true)} />;
+  }
+
+  return <MainApp />;
 };
 
 // 包装整个应用
