@@ -1249,8 +1249,7 @@ const MainApp = () => {
 
 // 主应用组件
 const App = () => {
-  const [isLogin, setIsLogin] = useState(false);
-  const [isRegister, setIsRegister] = useState(false);
+  const [showLogin, setShowLogin] = useState(true);
   const { user } = useAuth();
 
   // 检查URL是否包含分享ID
@@ -1261,10 +1260,11 @@ const App = () => {
   }
 
   if (!user) {
-    if (isRegister) {
-      return <Register onRegisterSuccess={() => setIsRegister(false)} />;
-    }
-    return <Login onLoginSuccess={() => setIsLogin(true)} />;
+    return showLogin ? (
+      <Login onLoginSuccess={() => setShowLogin(false)} />
+    ) : (
+      <Register onRegisterSuccess={() => setShowLogin(true)} />
+    );
   }
 
   return <MainApp />;

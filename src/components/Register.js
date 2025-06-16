@@ -119,7 +119,7 @@ const Register = ({ onRegisterSuccess }) => {
                             <Link
                                 component="button"
                                 variant="body2"
-                                onClick={() => onRegisterSuccess()}
+                                onClick={() => onRegisterSuccess(true)}
                                 sx={{ cursor: 'pointer' }}
                             >
                                 已有账号？返回登录
