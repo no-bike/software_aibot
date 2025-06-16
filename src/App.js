@@ -23,7 +23,8 @@ import {
   InputAdornment,
   Chip,
   Switch,
-  FormControlLabel
+  FormControlLabel,
+  keyframes
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -37,6 +38,57 @@ import ClearIcon from '@mui/icons-material/Clear';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Settings from './components/Settings';
 import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusionResponses } from './services/apiService';
+
+// 跳动点动画
+const bounce = keyframes`
+  0%, 60%, 100% {
+    animation-timing-function: cubic-bezier(0.215, 0.610, 0.355, 1.000);
+    transform: translateY(0);
+  }
+  30% {
+    animation-timing-function: cubic-bezier(0.755, 0.050, 0.855, 0.060);
+    transform: translateY(-8px);
+  }
+`;
+
+// 跳动点组件
+const TypingIndicator = () => (
+  <Box
+    sx={{
+      display: 'flex',
+      justifyContent: 'flex-start',
+      mb: 2
+    }}
+  >
+    <Paper
+      sx={{
+        p: 2,
+        maxWidth: '70%',
+        backgroundColor: 'grey.100',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5
+      }}
+    >
+      <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
+        AI正在思考
+      </Typography>
+      {[0, 1, 2].map((index) => (
+        <Box
+          key={index}
+          sx={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            backgroundColor: 'primary.main',
+            animation: `${bounce} 1.4s infinite`,
+            animationDelay: `${index * 0.16}s`
+          }}
+        />
+      ))}
+    </Paper>
+  </Box>
+);
 
 const App = () => {
   const [message, setMessage] = useState('');
@@ -52,6 +104,7 @@ const App = () => {
   const [mergeResponses, setMergeResponses] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [isLoadingResponse, setIsLoadingResponse] = useState(false);
 
   // 从API加载模型列表
   useEffect(() => {
@@ -144,6 +197,7 @@ const App = () => {
 
     const currentMessage = message;
     setMessage('');  // 清空输入框
+    setIsLoadingResponse(true); // 开始加载状态
 
     // 确保有对话ID
     let conversationId = currentConversationId;
@@ -257,6 +311,8 @@ const App = () => {
           return conv;
         });
       });
+    } finally {
+      setIsLoadingResponse(false); // 结束加载状态
     }
   };
 
@@ -626,6 +682,9 @@ const App = () => {
                       </Paper>
                     </Box>
                   ))}
+                  
+                  {/* 显示加载指示器 */}
+                  {isLoadingResponse && <TypingIndicator />}
                 </Box>
 
                 <Box sx={{ display: 'flex', gap: 1 }}>
@@ -635,14 +694,16 @@ const App = () => {
                     placeholder="Type your message..."
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                    onKeyPress={(e) => e.key === 'Enter' && !isLoadingResponse && handleSend()}
+                    disabled={isLoadingResponse}
                   />
                   <Button
                     variant="contained"
                     endIcon={<SendIcon />}
                     onClick={handleSend}
+                    disabled={isLoadingResponse || !message.trim()}
                   >
-                    Send
+                    {isLoadingResponse ? '发送中...' : 'Send'}
                   </Button>
                 </Box>
               </>

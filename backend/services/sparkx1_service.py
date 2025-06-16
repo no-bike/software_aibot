@@ -9,8 +9,13 @@ logger = logging.getLogger(__name__)
 async def get_sparkx1_response(message: str, conversation_history: List[Dict] = None) -> str:
     """调用讯飞SparkX1 HTTP API获取响应"""
     async with httpx.AsyncClient() as client:
-        api_token = os.environ.get("SPARKX1_API_TOKEN", "")
+        api_token = os.environ.get("SPARKX1_API_KEY", "")
         api_base = os.environ.get("SPARKX1_API_BASE", "")
+        
+        if not api_token:
+            raise HTTPException(status_code=500, detail="未配置SPARKX1_API_KEY环境变量")
+        if not api_base:
+            raise HTTPException(status_code=500, detail="未配置SPARKX1_API_BASE环境变量")
         
         headers = {
             "Content-Type": "application/json",

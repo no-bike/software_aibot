@@ -13,6 +13,7 @@ import traceback
 from services.deepseek_service import get_deepseek_response
 from services.sparkx1_service import get_sparkx1_response
 from services.moonshot_service import get_moonshot_response
+from services.qwen_service import get_qwen_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 
 # 配置日志
@@ -109,6 +110,12 @@ default_models = [
         "apiSecret": os.environ.get("SPARKX1_API_SECRET", ""),
         "appId": os.environ.get("SPARKX1_APP_ID", ""),
         "url": os.environ.get("SPARKX1_API_BASE", "")
+    },
+    {
+        "id": "qwen",
+        "name": "通义千问",
+        "apiKey": os.environ.get("QWEN_API_KEY", ""),
+        "url": os.environ.get("QWEN_API_BASE", "")
     }
 ]
 
@@ -264,6 +271,8 @@ async def chat(request: MessageRequest):
                     if not api_config:
                         raise HTTPException(status_code=400, detail="Moonshot模型未配置")
                     response_content = await get_moonshot_response(request.message, history, api_config)
+                elif model_id == "qwen":
+                    response_content = await get_qwen_response(request.message, history)
                 else:
                     raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
                 logger.info(f"收到AI响应: {response_content}")

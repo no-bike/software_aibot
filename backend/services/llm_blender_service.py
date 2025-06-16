@@ -74,7 +74,7 @@ class LLMBlenderService:
             
         try:
             logger.info("🚀 开始初始化 LLM-Blender 服务...")
-            CUSTOM_CACHE_DIR='D://hf_cache'
+            
             # 初始化 Blender
             if self.blender is None:
                 logger.info("📦 创建 Blender 实例...")
@@ -86,7 +86,7 @@ class LLMBlenderService:
                 start_time = time.time()
                 self.blender.loadranker(
                     "llm-blender/PairRM",
-                    cache_dir=CUSTOM_CACHE_DIR,
+                    device="cpu"
                 )
                 ranker_time = time.time() - start_time
                 self.ranker_loaded = True
@@ -101,7 +101,7 @@ class LLMBlenderService:
                     start_time = time.time()
                     self.blender.loadfuser(
                         "llm-blender/gen_fuser_3b",
-                        cache_dir=CUSTOM_CACHE_DIR,
+                        device="cpu",
                         local_files_only=True  # 避免符号链接警告
                     )
                     fuser_time = time.time() - start_time
