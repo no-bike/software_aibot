@@ -507,7 +507,7 @@ class MongoDBService:
         """获取分享的会话内容"""
         try:
             # 获取分享记录
-            share = await self.db.shares.find_one({"share_id": share_id, "is_active": True})
+            share = await self.db.shares.find_one({"share_id": share_id})
             if not share:
                 return None
             
@@ -539,7 +539,7 @@ class MongoDBService:
         """获取用户的所有分享"""
         try:
             shares = []
-            cursor = self.db.shares.find({"user_id": user_id, "is_active": True}).sort("created_at", -1)
+            cursor = self.db.shares.find({"user_id": user_id}).sort("created_at", -1)
             
             async for share in cursor:
                 # 获取会话标题
@@ -562,15 +562,14 @@ class MongoDBService:
             return []
     
     async def deactivate_share(self, share_id: str, user_id: str) -> bool:
-        """停用分享"""
+        """删除分享"""
         try:
-            result = await self.db.shares.update_one(
-                {"share_id": share_id, "user_id": user_id},
-                {"$set": {"is_active": False}}
+            result = await self.db.shares.delete_one(
+                {"share_id": share_id, "user_id": user_id}
             )
-            return result.modified_count > 0
+            return result.deleted_count > 0
         except Exception as e:
-            logger.error(f"Failed to deactivate share: {str(e)}")
+            logger.error(f"Failed to delete share: {str(e)}")
             return False
 
 # 全局 MongoDB 服务实例
