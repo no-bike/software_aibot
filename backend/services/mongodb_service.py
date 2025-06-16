@@ -516,10 +516,19 @@ class MongoDBService:
             if not conversation:
                 return None
             
+            # 获取分享用户信息
+            user = await self.db.users.find_one({"_id": ObjectId(share["user_id"])})
+            user_info = {
+                "id": str(user["_id"]),
+                "username": user.get("username", "未知用户"),
+                "email": user.get("email", "")
+            } if user else {"username": "未知用户"}
+            
             return {
                 "conversation": conversation,
                 "shareId": share_id,
-                "createdAt": share["created_at"]
+                "createdAt": share["created_at"],
+                "sharedBy": user_info
             }
             
         except Exception as e:
