@@ -1116,3 +1116,114 @@ async def get_user_stats(user_id: str):
                 "Access-Control-Allow-Credentials": "true"
             }
         )
+
+# 分享会话
+@app.post("/api/conversations/{conversation_id}/share")
+async def share_conversation(conversation_id: str, request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        
+        # 验证会话是否存在且属于该用户
+        conversation = await mongodb_service.get_conversation(conversation_id, user_id)
+        if not conversation:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "会话不存在或无权访问"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 创建分享
+        share_result = await mongodb_service.create_share(conversation_id, user_id)
+        if not share_result:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "创建分享失败"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content=share_result,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"分享会话失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"分享会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取分享的会话
+@app.get("/api/shared/{share_id}")
+async def get_shared_conversation(share_id: str):
+    try:
+        shared_data = await mongodb_service.get_shared_conversation(share_id)
+        if not shared_data:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "分享的会话不存在或已失效"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        return JSONResponse(
+            content=shared_data,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取分享的会话失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取分享的会话失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取用户分享的所有会话
+@app.get("/api/shared")
+async def get_user_shares(request: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = request.cookies.get("user_id", "default_user")
+        
+        shares = await mongodb_service.get_user_shares(user_id)
+        return JSONResponse(
+            content={"sharedConversations": shares},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取用户分享列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取用户分享列表失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
