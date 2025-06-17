@@ -52,10 +52,11 @@ async def get_qwen_response(message: str, conversation_history: List[Dict] = Non
             
             if response.status_code == 200:
                 result = response.json()
-                logger.info(f"通义千问 API响应: {result}")
+                logger.info(f"通义千问 API响应长度: {len(str(result))}")
                 
                 if "choices" in result and len(result["choices"]) > 0:
                     content = result["choices"][0]["message"]["content"]
+                    logger.info(f"成功获取通义千问响应，内容长度: {len(content)}")
                     return content
                 else:
                     raise HTTPException(status_code=500, 

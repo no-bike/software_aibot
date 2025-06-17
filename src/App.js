@@ -30,25 +30,35 @@ import {
   AppBar,
   Toolbar,
   Snackbar,
-  Alert
+  Alert,
+  Avatar,
+  Drawer,
+  ListItemButton,
+  ListItemIcon,
+  CircularProgress,
+  Menu,
+  Fab
 } from '@mui/material';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import SendIcon from '@mui/icons-material/Send';
+import {
+  Send as SendIcon,
+  Add as AddIcon,
+  Settings as SettingsIcon,
+  DarkMode as DarkModeIcon,
+  LightMode as LightModeIcon,
+  Delete as DeleteIcon,
+  Edit as EditIcon,
+  Share as ShareIcon,
+  Visibility as VisibilityIcon,
+  ContentCopy as ContentCopyIcon,
+  LightbulbOutlined as LightbulbIcon
+} from '@mui/icons-material';
 import HistoryIcon from '@mui/icons-material/History';
-import AddIcon from '@mui/icons-material/Add';
-import DeleteIcon from '@mui/icons-material/Delete';
-import EditIcon from '@mui/icons-material/Edit';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
-import SettingsIcon from '@mui/icons-material/Settings';
-import DarkModeIcon from '@mui/icons-material/DarkMode';
-import LightModeIcon from '@mui/icons-material/LightMode';
 import LogoutIcon from '@mui/icons-material/Logout';
-import ShareIcon from '@mui/icons-material/Share';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import ShareListIcon from '@mui/icons-material/List';
-import VisibilityIcon from '@mui/icons-material/Visibility';
 import Settings from './components/Settings';
 import Login from './components/Login';
 import Register from './components/Register';
@@ -58,6 +68,7 @@ import { getModels, updateModelSelection, sendMessage as sendMessageToAPI, fusio
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import ShareDialog from './components/ShareDialog';
 import SharedConversation from './components/SharedConversation';
+import PromptHelper from './components/PromptHelper';
 
 // 跳动点动画
 const bounce = keyframes`
@@ -127,6 +138,7 @@ const MainApp = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [isLoadingResponse, setIsLoadingResponse] = useState(false);
+  const [isCompletionLoading, setIsCompletionLoading] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const messagesEndRef = useRef(null);
   const [streamingContent, setStreamingContent] = useState('');
@@ -137,6 +149,26 @@ const MainApp = () => {
   const [sharedLink, setSharedLink] = useState('');
   const [sharedError, setSharedError] = useState('');
   const [deleteError, setDeleteError] = useState('');
+  const [shareDialogOpen, setShareDialogOpen] = useState(false);
+  const [shareUrl, setShareUrl] = useState('');
+  const [isSharedView, setIsSharedView] = useState(false);
+  const [sharedConversation, setSharedConversation] = useState(null);
+  const [promptHelperOpen, setPromptHelperOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [userMessage, setUserMessage] = useState('');
+  const [autoCompletions, setAutoCompletions] = useState([]);
+  const [selectedCompletionIndex, setSelectedCompletionIndex] = useState(-1);
+  const [showCompletions, setShowCompletions] = useState(false);
+  const [completionMode, setCompletionMode] = useState('transformer'); // 'transformer', 'intelligent' 或 'template'
+  const inputRef = useRef(null);
+  const debounceTimerRef = useRef(null);
+
+  // 新增：Transformer模型相关状态
+  const [availableModels, setAvailableModels] = useState({});
+  const [currentModel, setCurrentModel] = useState('auto');
+  const [modelStatus, setModelStatus] = useState(null);
+  const [modelLoading, setModelLoading] = useState(false);
 
   // 从API加载模型列表
   useEffect(() => {
@@ -622,6 +654,272 @@ const MainApp = () => {
       setDeleteError('删除分享失败，请稍后重试');
     }
   };
+
+  // 处理分享功能
+  const handleShare = async () => {
+    if (messages.length === 0) {
+      setError('没有对话内容可分享');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      
+      const response = await fetch('http://localhost:8000/api/conversations/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ messages })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setShareUrl(`${window.location.origin}/shared/${data.share_id}`);
+        setShareDialogOpen(true);
+      } else {
+        const errorData = await response.json();
+        setError(errorData.detail || '分享失败');
+      }
+    } catch (err) {
+      setError('网络错误，请检查连接');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // 新增：获取可用模型列表
+  const fetchAvailableModels = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/models/transformer/available', {
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAvailableModels(data.available_models || {});
+      }
+    } catch (error) {
+      console.error('获取模型列表失败:', error);
+    }
+  };
+
+  // 新增：获取模型状态
+  const fetchModelStatus = async () => {
+    try {
+      const response = await fetch('http://localhost:8000/api/models/transformer/status', {
+        credentials: 'include'
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setModelStatus(data.status);
+      }
+    } catch (error) {
+      console.error('获取模型状态失败:', error);
+    }
+  };
+
+  // 新增：切换模型
+  const switchModel = async (modelKey) => {
+    setModelLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/models/transformer/switch', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ model_key: modelKey })
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setCurrentModel(modelKey);
+        console.log('模型切换成功:', result.model_info);
+        
+        // 刷新模型状态
+        await fetchModelStatus();
+      } else {
+        console.error('模型切换失败');
+      }
+    } catch (error) {
+      console.error('切换模型时出错:', error);
+    } finally {
+      setModelLoading(false);
+    }
+  };
+
+  // 组件加载时获取模型信息
+  useEffect(() => {
+    fetchAvailableModels();
+    fetchModelStatus();
+  }, []);
+
+  const getAutocomplete = async (partial_input) => {
+    try {
+      setIsCompletionLoading(true);
+      let endpoint = '';
+      
+      // 根据模式选择不同的API端点
+      switch (completionMode) {
+        case 'transformer':
+          endpoint = 'http://localhost:8000/api/prompts/advanced-autocomplete';
+          break;
+        case 'intelligent':
+          endpoint = 'http://localhost:8000/api/prompts/intelligent-autocomplete';
+          break;
+        case 'template':
+          endpoint = 'http://localhost:8000/api/prompts/template-autocomplete';
+          break;
+        default:
+          endpoint = 'http://localhost:8000/api/prompts/advanced-autocomplete';
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ 
+          partial_input: partial_input,
+          max_completions: 5
+        })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setAutoCompletions(data.completions || []);
+        setShowCompletions(data.completions && data.completions.length > 0);
+      }
+    } catch (error) {
+      console.error('自动补全失败:', error);
+      setAutoCompletions([]);
+      setShowCompletions(false);
+    } finally {
+      setIsCompletionLoading(false);
+    }
+  };
+
+
+
+  // 处理键盘事件（包括Tab键自动补全）
+  const handleKeyDown = async (e) => {
+    console.log('⌨️ Key pressed:', e.key);
+    
+    // Tab键自动补全
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      console.log('🔄 Tab key pressed!', { 
+        showCompletions, 
+        autoCompletions: autoCompletions.length,
+        completionMode 
+      });
+      
+      if (showCompletions && autoCompletions.length > 0) {
+        // 应用选中的或第一个完整补全
+        const selectedCompletion = selectedCompletionIndex >= 0 
+          ? autoCompletions[selectedCompletionIndex] 
+          : autoCompletions[0];
+        console.log('✅ Applying completion:', selectedCompletion);
+        setMessage(selectedCompletion);
+        setShowCompletions(false);
+        setSelectedCompletionIndex(-1);
+      } else {
+        // 如果没有补全建议，获取当前输入的补全
+        console.log('🔍 No completions shown, fetching for:', message);
+        getAutocomplete(message);
+      }
+      return;
+    }
+
+    // 方向键导航补全列表
+    if (showCompletions && autoCompletions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedCompletionIndex(prev => 
+          prev < autoCompletions.length - 1 ? prev + 1 : 0
+        );
+        return;
+      }
+      
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedCompletionIndex(prev => 
+          prev > 0 ? prev - 1 : autoCompletions.length - 1
+        );
+        return;
+      }
+
+      // Enter键选择当前高亮的补全
+      if (e.key === 'Enter' && selectedCompletionIndex >= 0) {
+        e.preventDefault();
+        setMessage(autoCompletions[selectedCompletionIndex]);
+        setShowCompletions(false);
+        setSelectedCompletionIndex(-1);
+        return;
+      }
+
+      // Escape键关闭补全列表
+      if (e.key === 'Escape') {
+        setShowCompletions(false);
+        setSelectedCompletionIndex(-1);
+        return;
+      }
+    }
+
+    // 原有的Enter键发送消息逻辑
+    if (e.key === 'Enter' && !e.shiftKey && !isLoadingResponse) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  // 处理输入变化
+  const handleMessageChange = (e) => {
+    const value = e.target.value;
+    console.log('📝 用户输入变化:', value);
+    setMessage(value);
+    
+    // 清除之前的自动补全防抖定时器
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      console.log('🔄 清除之前的自动补全防抖定时器');
+    }
+    
+    // 如果输入为空，立即清除所有补全
+    if (value.length === 0) {
+      setShowCompletions(false);
+      setAutoCompletions([]);
+      console.log('🧹 输入为空，清除所有补全');
+      return;
+    }
+    
+    // 只处理自动补全（完整句子补全），词汇预测由useEffect处理
+    if (value.length >= 3) {  // 至少3个字符才触发自动补全
+      debounceTimerRef.current = setTimeout(() => {
+        console.log('⏰ 自动补全防抖触发 (1秒延迟):', value);
+        getAutocomplete(value);
+      }, 1000);  // 1秒延迟
+    } else {
+      // 输入长度不足时，清除自动补全
+      setShowCompletions(false);
+      setAutoCompletions([]);
+      console.log('🧹 输入长度不足3字符，清除自动补全');
+    }
+  };
+
+  // 处理提示词应用
+  const handleApplyPrompt = (appliedPrompt) => {
+    setMessage(appliedPrompt);
+    setShowCompletions(false);
+    setAutoCompletions([]);
+    // 可以选择自动聚焦到输入框
+    if (inputRef.current) {
+      inputRef.current.focus();
+    }
+  };
+
   return (
     <ThemeProvider theme={isDarkMode ? darkTheme : lightTheme}>
       <CssBaseline />
@@ -824,7 +1122,7 @@ const MainApp = () => {
                   </>
                 )}
 
-                {/* 设置和主题切换按钮放在左下角 */}
+                  {/* 设置和主题切换按钮放在左下角 */}
                 <Box sx={{ mt: 'auto', pt: 2, borderTop: 1, borderColor: 'divider' }}>
                   <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
                     <Button
@@ -909,176 +1207,176 @@ const MainApp = () => {
                               }}
                             >
                               <Paper
-                                className={
-                                  msg.role === 'user' 
-                                    ? 'user-message' 
-                                    : msg.model === 'error'
-                                      ? 'error-message'
-                                      : 'assistant-message'
-                                }
-                                sx={{
-                                  p: 2,
-                                  maxWidth: '70%',
-                                  backgroundColor: msg.role === 'user' 
-                                    ? 'transparent' 
-                                    : msg.model === 'error'
-                                      ? 'transparent'
-                                      : 'transparent'
+                            className={
+                              msg.role === 'user' 
+                                ? 'user-message' 
+                                : msg.model === 'error'
+                                  ? 'error-message'
+                                  : 'assistant-message'
+                            }
+                            sx={{
+                              p: 2,
+                              maxWidth: '70%',
+                              backgroundColor: msg.role === 'user' 
+                                ? 'transparent' 
+                                : msg.model === 'error'
+                                  ? 'transparent'
+                                  : 'transparent'
+                            }}
+                          >
+                            {msg.role === 'user' ? (
+                              <Typography 
+                                variant="body1" 
+                                sx={{ 
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word'
                                 }}
                               >
-                                {msg.role === 'user' ? (
-                                  <Typography 
-                                    variant="body1" 
-                                    sx={{ 
-                                      whiteSpace: 'pre-wrap',
-                                      wordBreak: 'break-word'
-                                    }}
-                                  >
-                                    {msg.content}
-                                  </Typography>
-                                ) : (
-                                  <Box sx={{ 
-                                    '& .code-block': {
-                                      margin: '1rem 0'
-                                    },
-                                    '& pre': { 
-                                      backgroundColor: 'transparent',
-                                      padding: 0,
-                                      margin: 0
-                                    },
-                                    '& code': {
-                                      backgroundColor: 'transparent',
-                                      padding: 0
-                                    },
-                                    '& p': {
-                                      margin: '0.5rem 0'
-                                    },
-                                    '& ul, & ol': {
-                                      margin: '0.5rem 0',
-                                      paddingLeft: '1.5rem'
-                                    },
-                                    '& table': {
-                                      borderCollapse: 'collapse',
-                                      width: '100%',
-                                      margin: '0.5rem 0'
-                                    },
-                                    '& th, & td': {
-                                      border: '1px solid #ddd',
-                                      padding: '0.5rem',
-                                      textAlign: 'left'
-                                    },
-                                    '& th': {
-                                      backgroundColor: 'rgba(0, 0, 0, 0.05)'
-                                    },
-                                    '& blockquote': {
-                                      borderLeft: '4px solid #ddd',
-                                      margin: '0.5rem 0',
-                                      padding: '0.5rem 0 0.5rem 1rem',
-                                      color: 'text.secondary'
-                                    }
-                                  }}>
-                                    <ReactMarkdown 
-                                      remarkPlugins={[remarkGfm]}
-                                      components={{
-                                        code: ({node, inline, className, children, ...props}) => {
-                                          const match = /language-(\w+)/.exec(className || '');
-                                          if (inline) {
-                                            return (
-                                              <code className={className} {...props}>
-                                                {children}
-                                              </code>
-                                            );
-                                          }
-                                          
-                                          // 检查是否为多行代码
-                                          const isMultiLine = String(children).includes('\n');
-                                          
-                                          if (isMultiLine) {
-                                            const handleCopy = () => {
-                                              navigator.clipboard.writeText(String(children));
-                                            };
-                                            
-                                            return (
-                                              <div className="code-block" style={{display: 'block'}}>
-                                                <button className="copy-btn" onClick={handleCopy}>
-                                                  复制
-                                                </button>
+                                {msg.content}
+                              </Typography>
+                            ) : (
+                              <Box sx={{ 
+                                '& .code-block': {
+                                  margin: '1rem 0'
+                                },
+                                '& pre': { 
+                                  backgroundColor: 'transparent',
+                                  padding: 0,
+                                  margin: 0
+                                },
+                                '& code': {
+                                  backgroundColor: 'transparent',
+                                  padding: 0
+                                },
+                                '& p': {
+                                  margin: '0.5rem 0'
+                                },
+                                '& ul, & ol': {
+                                  margin: '0.5rem 0',
+                                  paddingLeft: '1.5rem'
+                                },
+                                '& table': {
+                                  borderCollapse: 'collapse',
+                                  width: '100%',
+                                  margin: '0.5rem 0'
+                                },
+                                '& th, & td': {
+                                  border: '1px solid #ddd',
+                                  padding: '0.5rem',
+                                  textAlign: 'left'
+                                },
+                                '& th': {
+                                  backgroundColor: 'rgba(0, 0, 0, 0.05)'
+                                },
+                                '& blockquote': {
+                                  borderLeft: '4px solid #ddd',
+                                  margin: '0.5rem 0',
+                                  padding: '0.5rem 0 0.5rem 1rem',
+                                  color: 'text.secondary'
+                                }
+                              }}>
+                                <ReactMarkdown 
+                                  remarkPlugins={[remarkGfm]}
+                                  components={{
+                                    code: ({node, inline, className, children, ...props}) => {
+                                      const match = /language-(\w+)/.exec(className || '');
+                                      if (inline) {
+                                        return (
+                                          <code className={className} {...props}>
+                                            {children}
+                                          </code>
+                                        );
+                                      }
+                                      
+                                      // 检查是否为多行代码
+                                      const isMultiLine = String(children).includes('\n');
+                                      
+                                      if (isMultiLine) {
+                                        const handleCopy = () => {
+                                          navigator.clipboard.writeText(String(children));
+                                        };
+                                        
+                                        return (
+                                          <div className="code-block" style={{display: 'block'}}>
+                                            <button className="copy-btn" onClick={handleCopy}>
+                                              复制
+                                            </button>
                                                 <pre style={{margin: 0}}>
                                                   <code 
-                                                    className={match ? `language-${match[1]}` : ''} 
-                                                    style={{
-                                                      backgroundColor: '#0d1117',
-                                                      color: '#4a9eff',
-                                                      padding: '16px 20px',
-                                                      borderRadius: '12px',
-                                                      fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
-                                                      fontSize: '14px',
-                                                      lineHeight: '1.8',
-                                                      display: 'block',
-                                                      width: '100%',
-                                                      boxSizing: 'border-box',
-                                                      border: '1px solid #30363d',
-                                                      whiteSpace: 'pre-wrap',
-                                                      wordBreak: 'break-word',
-                                                      overflow: 'auto',
-                                                      margin: '12px 0',
-                                                      boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
-                                                    }}
-                                                    {...props}
-                                                  >
-                                                    {children}
-                                                  </code>
-                                                </pre>
-                                              </div>
-                                            );
-                                          }
-                                          
-                                          // 单行代码简单显示
+                                                className={match ? `language-${match[1]}` : ''} 
+                                                style={{
+                                                  backgroundColor: '#0d1117',
+                                                  color: '#4a9eff',
+                                                  padding: '16px 20px',
+                                                  borderRadius: '12px',
+                                                  fontFamily: 'JetBrains Mono, Fira Code, Consolas, monospace',
+                                                  fontSize: '14px',
+                                                  lineHeight: '1.8',
+                                                  display: 'block',
+                                                  width: '100%',
+                                                  boxSizing: 'border-box',
+                                                  border: '1px solid #30363d',
+                                                  whiteSpace: 'pre-wrap',
+                                                  wordBreak: 'break-word',
+                                                  overflow: 'auto',
+                                                  margin: '12px 0',
+                                                  boxShadow: '0 4px 8px rgba(0, 0, 0, 0.3)',
+                                                }}
+                                                {...props}
+                                              >
+                                                {children}
+                                              </code>
+                                            </pre>
+                                          </div>
+                                        );
+                                      }
+                                      
+                                      // 单行代码简单显示
                                           return (
                                             <code 
-                                              className={match ? `language-${match[1]}` : ''} 
-                                              style={{
-                                                backgroundColor: 'rgba(116, 199, 236, 0.2)',
-                                                color: '#74c7ec',
-                                                padding: '2px 6px',
-                                                borderRadius: '4px',
-                                                fontFamily: 'JetBrains Mono, Consolas, monospace',
-                                                fontSize: '0.9em'
-                                              }}
-                                              {...props}
-                                            >
-                                              {children}
-                                            </code>
-                                          );
-                                        }
-                                      }}
-                                    >
-                                      {msg.content}
-                                    </ReactMarkdown>
-                                  </Box>
-                                )}
-                                {msg.model && (
-                                  <Typography 
-                                    variant="caption" 
-                                    color="text.secondary" 
-                                    sx={{ 
-                                      display: 'block', 
-                                      mt: 1,
-                                      color: msg.model === 'error' ? 'error.main' : 'text.secondary'
-                                    }}
-                                  >
-                                    {msg.model === 'merged' 
-                                      ? '融合回答' 
-                                      : msg.model === 'error'
-                                        ? '错误'
-                                        : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
-                                  </Typography>
+                                          className={match ? `language-${match[1]}` : ''} 
+                                          style={{
+                                            backgroundColor: 'rgba(116, 199, 236, 0.2)',
+                                            color: '#74c7ec',
+                                            padding: '2px 6px',
+                                            borderRadius: '4px',
+                                            fontFamily: 'JetBrains Mono, Consolas, monospace',
+                                            fontSize: '0.9em'
+                                          }}
+                                          {...props}
+                                        >
+                                          {children}
+                                        </code>
+                                      );
+                                    }
+                                  }}
+                                >
+                                  {msg.content}
+                                </ReactMarkdown>
+                              </Box>
+                            )}
+                            {msg.model && (
+                              <Typography 
+                                variant="caption" 
+                                color="text.secondary" 
+                                sx={{ 
+                                  display: 'block', 
+                                  mt: 1,
+                                  color: msg.model === 'error' ? 'error.main' : 'text.secondary'
+                                }}
+                              >
+                                {msg.model === 'merged' 
+                                  ? '融合回答' 
+                                  : msg.model === 'error'
+                                    ? '错误'
+                                    : `Model: ${models.find(m => m.id === msg.model)?.name || msg.model}`}
+                              </Typography>
                                 )}
                                 <Typography variant="caption" color="text.secondary">
-                                  {msg.timestamp && new Date(msg.timestamp).toLocaleTimeString()}
-                                </Typography>
-                              </Paper>
-                            </Box>
+                              {msg.timestamp && new Date(msg.timestamp).toLocaleTimeString()}
+                            </Typography>
+                          </Paper>
+                        </Box>
                           );
                         }).filter(Boolean) // 过滤掉null值
                       ) : (
@@ -1086,27 +1384,146 @@ const MainApp = () => {
                           暂无消息记录
                         </Typography>
                       )}
+                  
+                  {/* 显示加载指示器 */}
+                  {isLoadingResponse && <TypingIndicator />}
+                </Box>
 
-                      {/* 显示加载指示器 */}
-                      {isLoadingResponse && <TypingIndicator />}
-                    </Box>
-
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <TextField
-                        fullWidth
-                        multiline
-                        maxRows={4}
-                        value={message}
-                        onChange={(e) => setMessage(e.target.value)}
-                        placeholder="输入消息..."
-                        onKeyPress={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey && !isLoadingResponse) {
-                            e.preventDefault();
-                            handleSend();
+                    <Box sx={{ display: 'flex', gap: 1, position: 'relative' }}>
+                      <Box sx={{ flex: 1, position: 'relative' }}>
+                        {/* 补全模式切换按钮 */}
+                        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                          <Chip
+                            label="🤖 Transformer补全"
+                            size="small"
+                            color={completionMode === 'transformer' ? 'primary' : 'default'}
+                            onClick={() => setCompletionMode('transformer')}
+                            clickable
+                          />
+                          <Chip
+                            label="🧠 智能补全"
+                            size="small"
+                            color={completionMode === 'intelligent' ? 'primary' : 'default'}
+                            onClick={() => setCompletionMode('intelligent')}
+                            clickable
+                          />
+                          <Chip
+                            label="📝 模板补全"
+                            size="small"
+                            color={completionMode === 'template' ? 'primary' : 'default'}
+                            onClick={() => setCompletionMode('template')}
+                            clickable
+                          />
+                          {completionMode === 'transformer' && (
+                            <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center', ml: 1 }}>
+                              基于预训练Transformer模型
+                            </Typography>
+                          )}
+                          {completionMode === 'intelligent' && (
+                            <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'center', ml: 1 }}>
+                              基于N-gram语言模型
+                            </Typography>
+                          )}
+                        </Box>
+                        
+                  <TextField
+                    fullWidth
+                          multiline
+                          maxRows={4}
+                    value={message}
+                          onChange={handleMessageChange}
+                          onKeyDown={handleKeyDown}
+                          placeholder={
+                            completionMode === 'transformer' 
+                              ? "输入消息... (Tab键AI智能补全)" 
+                              : completionMode === 'intelligent' 
+                                ? "输入消息... (Tab键补全下一个词)" 
+                                : "输入消息... (Tab键补全整句)"
                           }
-                        }}
-                        disabled={isLoadingResponse}
-                      />
+                    disabled={isLoadingResponse}
+                          inputRef={inputRef}
+                          InputProps={{
+                            endAdornment: (
+                              <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                <Tooltip title="智能提示词助手">
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => setPromptHelperOpen(true)}
+                                    sx={{ color: 'primary.main' }}
+                                  >
+                                    <LightbulbIcon />
+                                  </IconButton>
+                                </Tooltip>
+                              </Box>
+                            )
+                          }}
+                        />
+                        
+
+                        
+                        {/* 自动补全下拉列表 */}
+                        {console.log('🎨 Rendering autocomplete:', { showCompletions, autoCompletions: autoCompletions.length })}
+                        {showCompletions && autoCompletions.length > 0 && (
+                          <Paper
+                            sx={{
+                              position: 'absolute',
+                              top: '100%',
+                              left: 0,
+                              right: 0,
+                              zIndex: 1000,
+                              maxHeight: 200,
+                              overflow: 'auto',
+                              mt: 0.5,
+                              border: 1,
+                              borderColor: 'divider'
+                            }}
+                          >
+                            <List dense>
+                              {autoCompletions.map((completion, index) => (
+                                <ListItem
+                                  key={index}
+                                  button
+                                  selected={index === selectedCompletionIndex}
+                                  onClick={() => {
+                                    setMessage(completion);
+                                    setShowCompletions(false);
+                                    setSelectedCompletionIndex(-1);
+                                    if (inputRef.current) {
+                                      inputRef.current.focus();
+                                    }
+                                  }}
+                                  sx={{
+                                    '&.Mui-selected': {
+                                      backgroundColor: 'primary.light',
+                                      color: 'primary.contrastText',
+                                      '&:hover': {
+                                        backgroundColor: 'primary.main',
+                                      }
+                                    }
+                                  }}
+                                >
+                                  <ListItemText
+                                    primary={completion}
+                                    primaryTypographyProps={{
+                                      style: {
+                                        whiteSpace: 'nowrap',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis'
+                                      }
+                                    }}
+                                  />
+                                </ListItem>
+                              ))}
+                            </List>
+                            <Box sx={{ p: 1, backgroundColor: 'grey.50', borderTop: 1, borderColor: 'divider' }}>
+                              <Typography variant="caption" color="text.secondary">
+                                💡 使用 ↑↓ 导航，Tab/Enter 选择完整补全，Esc 关闭
+                              </Typography>
+                            </Box>
+                          </Paper>
+                        )}
+                      </Box>
+                      
                       <Button
                         variant="contained"
                         onClick={handleSend}
@@ -1313,6 +1730,15 @@ const MainApp = () => {
             {deleteError}
           </Alert>
         </Snackbar>
+
+        {/* 智能提示词助手 */}
+        <PromptHelper
+          open={promptHelperOpen}
+          onClose={() => setPromptHelperOpen(false)}
+          onApplyPrompt={handleApplyPrompt}
+          userInput={message}
+          setUserInput={setMessage}
+        />
       </Box>
     </ThemeProvider>
   );
@@ -1320,8 +1746,7 @@ const MainApp = () => {
 
 // 主应用组件
 const App = () => {
-  const [isLogin, setIsLogin] = useState(false);
-  const [isRegister, setIsRegister] = useState(false);
+  const [showLogin, setShowLogin] = useState(true);
   const { user } = useAuth();
 
   // 检查URL是否包含分享ID
@@ -1332,10 +1757,11 @@ const App = () => {
   }
 
   if (!user) {
-    if (isRegister) {
-      return <Register onRegisterSuccess={() => setIsRegister(false)} />;
-    }
-    return <Login onLoginSuccess={() => setIsLogin(true)} />;
+  return showLogin ? (
+      <Login onLoginSuccess={() => setShowLogin(false)} />
+  ) : (
+      <Register onRegisterSuccess={() => setShowLogin(true)} />
+  );
   }
 
   return <MainApp />;
@@ -1348,4 +1774,4 @@ const AppWithAuth = () => (
   </AuthProvider>
 );
 
-export default AppWithAuth; 
+export default AppWithAuth;

@@ -107,6 +107,7 @@ class LLMBlenderService:
                     fuser_time = time.time() - start_time
                     self.fuser_loaded = True
                     logger.info(f"✅ GenFuser 加载成功 ({fuser_time:.2f}s)")
+                    logger.info("📝 GenFuser 已配置支持更长输入 (运行时将使用 max_length=2048, candidate_max_length=512)")
                 except Exception as e:
                     logger.warning(f"⚠️ GenFuser 加载失败，将使用仅排序模式: {str(e)}")
                     self.fuser_loaded = False
@@ -262,8 +263,9 @@ class LLMBlenderService:
         Returns:
             按质量排序后的回答列表，最优回答在前
         """
-        if not self.ranker_loaded:
-            logger.error("❌ Ranker未加载，无法进行排序")
+        # 懒加载机制：如果Ranker未加载，尝试重新加载
+        if not await self._lazy_load_ranker():
+            logger.error("❌ 无法加载Ranker，返回原始回答顺序")
             return responses
         
         if len(responses) <= 1:
@@ -363,8 +365,9 @@ class LLMBlenderService:
     ) -> str:
         """使用 GenFuser 进行英文融合（原有逻辑）"""
         
-        if not self.fuser_loaded:
-            logger.warning("⚠️ GenFuser 未加载，降级到简单融合")
+        # 懒加载机制：如果GenFuser未加载，尝试重新加载
+        if not await self._lazy_load_fuser():
+            logger.warning("⚠️ GenFuser加载失败，降级到简单融合")
             return await self._simple_fusion_from_responses(query, top_responses)
             
         try:
@@ -375,14 +378,29 @@ class LLMBlenderService:
             instructions = [instruction] if instruction else None
             candidates = [[resp["content"] for resp in top_responses]]
             
+            # 临时修改fuser配置以支持更长的输入序列
+            original_max_length = self.blender.fuser_config.max_length
+            original_candidate_maxlength = self.blender.fuser_config.candidate_maxlength
+            
+            # 设置更大的输入处理长度限制
+            self.blender.fuser_config.max_length = 2048  # 输入序列的最大长度
+            self.blender.fuser_config.candidate_maxlength = 1024  # 单个候选回答的最大长度
+            
+            logger.info(f"📝 临时调整GenFuser配置: max_length={self.blender.fuser_config.max_length}, candidate_maxlength={self.blender.fuser_config.candidate_maxlength}")
+            
             # 执行融合生成
             start_time = time.time()
             fused_results = self.blender.fuse(
                 inputs=inputs,
                 candidates=candidates,
                 instructions=instructions,
-                batch_size=1
+                batch_size=1,
+                candidate_max_length=1024
             )
+            
+            # 恢复原始配置
+            self.blender.fuser_config.max_length = original_max_length
+            self.blender.fuser_config.candidate_maxlength = original_candidate_maxlength
             
             fuse_time = time.time() - start_time
             fused_content = fused_results[0] if fused_results else "融合生成失败"
@@ -502,6 +520,54 @@ class LLMBlenderService:
                 fusion_parts.append(f"- {resp['modelId']}: {resp['content'][:200]}{'...' if len(resp['content']) > 200 else ''}")
         
         return "\n".join(fusion_parts)
+
+    async def _lazy_load_ranker(self) -> bool:
+        """懒加载Ranker模型"""
+        if self.ranker_loaded:
+            return True
+            
+        try:
+            logger.info("🔄 懒加载 PairRM Ranker...")
+            if self.blender is None:
+                self.blender = llm_blender.Blender()
+            
+            start_time = time.time()
+            self.blender.loadranker(
+                "llm-blender/PairRM",
+                device="cpu"
+            )
+            ranker_time = time.time() - start_time
+            self.ranker_loaded = True
+            logger.info(f"✅ Ranker 懒加载成功 ({ranker_time:.2f}s)")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ranker懒加载失败: {str(e)}")
+            return False
+    
+    async def _lazy_load_fuser(self) -> bool:
+        """懒加载GenFuser模型"""
+        if self.fuser_loaded:
+            return True
+            
+        try:
+            logger.info("🔄 懒加载 GenFuser...")
+            if self.blender is None:
+                self.blender = llm_blender.Blender()
+            
+            start_time = time.time()
+            self.blender.loadfuser(
+                "llm-blender/gen_fuser_3b",
+                device="cpu",
+                local_files_only=True
+            )
+            fuser_time = time.time() - start_time
+            self.fuser_loaded = True
+            logger.info(f"✅ GenFuser 懒加载成功 ({fuser_time:.2f}s)")
+            logger.info("📝 GenFuser 配置: 支持更长输入 (max_length=2048, candidate_max_length=512)")
+            return True
+        except Exception as e:
+            logger.error(f"❌ GenFuser懒加载失败: {str(e)}")
+            return False
 
 # 全局服务实例
 _blender_service = None

@@ -208,3 +208,248 @@ code {
   color: #ffffff !important;
   box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
 }
+
+/* 新增：模型选择器样式 */
+.model-selector {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 15px;
+  padding: 20px;
+  margin-bottom: 20px;
+  color: white;
+  box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3);
+}
+
+.model-selector h3 {
+  margin-top: 0;
+  font-size: 1.4rem;
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.model-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.model-select {
+  flex: 1;
+  padding: 10px 15px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #333;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.model-select:hover {
+  background: rgba(255, 255, 255, 1);
+  transform: translateY(-1px);
+}
+
+.model-select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.loading-spinner {
+  animation: spin 1s linear infinite;
+  font-size: 18px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* 模型状态显示 */
+.model-status {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 15px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.status-item:last-child {
+  margin-bottom: 0;
+}
+
+.status-item strong {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
+}
+
+.status-active {
+  color: #4CAF50;
+  font-weight: bold;
+}
+
+.status-inactive {
+  color: #FF9800;
+  font-weight: bold;
+}
+
+/* 增强词汇预测样式 */
+.predictions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.prediction-item {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  color: white;
+  text-align: center;
+}
+
+.prediction-item:hover {
+  transform: translateY(-2px) scale(1.05);
+  box-shadow: 0 5px 15px rgba(240, 147, 251, 0.4);
+}
+
+.prediction-item .word {
+  font-weight: bold;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.prediction-item .probability {
+  font-size: 11px;
+  opacity: 0.9;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 2px 6px;
+  border-radius: 10px;
+  margin-bottom: 2px;
+}
+
+.prediction-item .model-source {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 模式选择器增强 */
+.mode-selector {
+  background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+  border-radius: 15px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 32px rgba(132, 250, 176, 0.3);
+}
+
+.mode-selector h3 {
+  margin-top: 0;
+  color: #2c3e50;
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.mode-chips {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.chip {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #2c3e50;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.chip.active {
+  background: #2c3e50;
+  color: white;
+  box-shadow: 0 4px 12px rgba(44, 62, 80, 0.3);
+}
+
+.mode-description {
+  text-align: center;
+  color: #2c3e50;
+  font-size: 14px;
+  font-style: italic;
+  opacity: 0.8;
+}
+
+/* 增强现有样式 */
+.word-predictions {
+  background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+  border-radius: 15px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 32px rgba(168, 237, 234, 0.3);
+}
+
+.word-predictions h3 {
+  margin-top: 0;
+  color: #2c3e50;
+  text-align: center;
+  font-size: 1.3rem;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .model-controls {
+    flex-direction: column;
+    gap: 15px;
+  }
+  
+  .model-select {
+    width: 100%;
+  }
+  
+  .predictions-grid {
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 8px;
+  }
+  
+  .mode-chips {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .chip {
+    width: 200px;
+    text-align: center;
+  }
+}

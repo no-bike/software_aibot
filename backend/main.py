@@ -17,6 +17,7 @@ from services.qwen_service import get_qwen_response, get_qwen_stream_response
 from services.fusion_service import get_fusion_response, get_advanced_fusion_response_direct
 from services.mongodb_service import mongodb_service
 from services.auth_routes import router as auth_router
+from services.prompt_service import get_prompt_service
 
 # 北京时区
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -105,6 +106,19 @@ class AdvancedFusionRequest(BaseModel):
 class UpdateTitleRequest(BaseModel):
     title: str
 
+# 提示词模板相关请求模型
+class PromptSuggestionRequest(BaseModel):
+    user_input: str
+    limit: Optional[int] = 5
+
+class PromptApplicationRequest(BaseModel):
+    template_id: str
+    user_input: str
+    placeholders: Optional[Dict[str, str]] = None
+
+class AutoCompletionRequest(BaseModel):
+    partial_input: str
+
 # 内存存储
 models = {}
 selected_models = []
@@ -137,14 +151,33 @@ default_models = [
 for model in default_models:
     models[model["id"]] = model
 
-# 启动时连接 MongoDB
+# 启动时连接 MongoDB 和设置模型缓存路径
 @app.on_event("startup")
 async def startup_event():
     try:
+        # 使用统一的模型路径配置
+        try:
+            from config.model_paths import get_model_path_config
+            config = get_model_path_config()
+            logger.info(f"📁 AI模型缓存基础目录: {config.base_cache_dir}")
+            
+            # 显示各模型缓存目录
+            cache_info = config.get_cache_info()
+            for model_type, info in cache_info['directories'].items():
+                logger.info(f"📁 {model_type.title()}缓存目录: {info['path']}")
+        except ImportError as e:
+            logger.warning(f"⚠️ 模型路径配置模块未找到，使用默认设置: {e}")
+            # 回退到简单设置
+            import os
+            transformer_cache_dir = "E:/transformer_models_cache"
+            os.makedirs(transformer_cache_dir, exist_ok=True)
+            os.environ["HF_HOME"] = transformer_cache_dir
+            logger.info(f"📁 使用默认Transformer缓存目录: {transformer_cache_dir}")
+        
         await mongodb_service.connect()
-        logger.info("Application started successfully")
+        logger.info("✅ Application started successfully")
     except Exception as e:
-        logger.error(f"Failed to start application: {str(e)}")
+        logger.error(f"❌ Failed to start application: {str(e)}")
 
 # 关闭时断开 MongoDB 连接
 @app.on_event("shutdown")
@@ -1373,6 +1406,757 @@ async def get_current_user(request: Request):
         return JSONResponse(
             status_code=500,
             content={"detail": f"获取用户信息失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# ================================
+# 提示词服务相关API
+# ================================
+
+# 获取所有提示词分类
+@app.get("/api/prompts/categories")
+async def get_prompt_categories():
+    """获取所有提示词分类"""
+    try:
+        prompt_service = get_prompt_service()
+        categories = prompt_service.get_categories()
+        
+        return JSONResponse(
+            content={"categories": categories},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取提示词分类失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取提示词分类失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 根据分类获取提示词模板
+@app.get("/api/prompts/templates/{category}")
+async def get_prompt_templates_by_category(category: str):
+    """根据分类获取提示词模板"""
+    try:
+        prompt_service = get_prompt_service()
+        templates = prompt_service.get_templates_by_category(category)
+        
+        return JSONResponse(
+            content={"templates": templates, "category": category},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取提示词模板失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取提示词模板失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取所有提示词模板
+@app.get("/api/prompts/templates")
+async def get_all_prompt_templates():
+    """获取所有提示词模板"""
+    try:
+        prompt_service = get_prompt_service()
+        all_templates = []
+        
+        for category in prompt_service.get_categories():
+            templates = prompt_service.get_templates_by_category(category)
+            for template in templates:
+                template["category"] = category
+                all_templates.append(template)
+        
+        return JSONResponse(
+            content={"templates": all_templates},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取所有提示词模板失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取所有提示词模板失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 智能建议提示词
+@app.post("/api/prompts/suggest")
+async def suggest_prompts(request: PromptSuggestionRequest):
+    """基于用户输入智能建议相关的提示词模板"""
+    try:
+        prompt_service = get_prompt_service()
+        suggestions = prompt_service.suggest_prompts(
+            request.user_input, 
+            limit=request.limit
+        )
+        
+        return JSONResponse(
+            content={
+                "suggestions": suggestions,
+                "input": request.user_input,
+                "count": len(suggestions)
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"智能建议提示词失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"智能建议提示词失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 应用提示词模板
+@app.post("/api/prompts/apply")
+async def apply_prompt_template(request: PromptApplicationRequest):
+    """应用提示词模板生成完整的提示"""
+    try:
+        prompt_service = get_prompt_service()
+        applied_prompt = prompt_service.apply_template(
+            request.template_id,
+            request.user_input,
+            request.placeholders
+        )
+        
+        # 获取模板信息用于返回
+        template = prompt_service.get_template_by_id(request.template_id)
+        
+        return JSONResponse(
+            content={
+                "applied_prompt": applied_prompt,
+                "template": template,
+                "original_input": request.user_input,
+                "placeholders": request.placeholders
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"应用提示词模板失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"应用提示词模板失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 自动补全建议
+@app.post("/api/prompts/autocomplete")
+async def get_auto_completions(request: AutoCompletionRequest):
+    """获取自动补全建议"""
+    try:
+        prompt_service = get_prompt_service()
+        completions = prompt_service.get_auto_completions(request.partial_input)
+        
+        return JSONResponse(
+            content={
+                "completions": completions,
+                "partial_input": request.partial_input,
+                "count": len(completions)
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取自动补全建议失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取自动补全建议失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# Transformer智能补全建议（基于预训练模型）
+@app.post("/api/prompts/transformer-autocomplete")
+async def get_transformer_completions(request: AutoCompletionRequest):
+    """获取基于Transformer的智能补全建议"""
+    try:
+        if request.partial_input:
+            # 获取来自高级Transformer混合服务的补全建议
+            from services.intelligent_completion_service import get_advanced_intelligent_completions
+            completions = get_advanced_intelligent_completions(request.partial_input, max_completions=5)
+            
+            return JSONResponse(
+                content={
+                    "completions": completions,
+                    "partial_input": request.partial_input,
+                    "count": len(completions),
+                    "type": "transformer",
+                    "status": "success"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                content={
+                    "completions": [],
+                    "partial_input": "",
+                    "count": 0,
+                    "type": "transformer",
+                    "status": "empty_input"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"获取Transformer补全时出错: {e}")
+        # 降级到智能补全
+        try:
+            from services.prompt_service import get_prompt_service
+            prompt_service = get_prompt_service()
+            completions = prompt_service.get_intelligent_completions(request.partial_input)
+            return JSONResponse(
+                content={
+                    "completions": completions,
+                    "partial_input": request.partial_input,
+                    "count": len(completions),
+                    "type": "transformer_fallback",
+                    "status": "fallback_to_intelligent",
+                    "fallback_reason": str(e)
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        except Exception as e2:
+            logger.error(f"降级到智能补全也失败: {e2}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": f"获取Transformer补全失败: {str(e)}",
+                    "fallback_error": str(e2),
+                    "type": "transformer",
+                    "status": "error"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+
+# 智能补全建议（基于N-gram语言模型）
+@app.post("/api/prompts/intelligent-autocomplete")
+async def get_intelligent_completions(request: AutoCompletionRequest):
+    """获取智能补全建议（基于N-gram语言模型的词汇预测）"""
+    try:
+        prompt_service = get_prompt_service()
+        completions = prompt_service.get_intelligent_completions(request.partial_input)
+        
+        return JSONResponse(
+            content={
+                "completions": completions,
+                "partial_input": request.partial_input,
+                "count": len(completions),
+                "type": "intelligent"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取智能补全建议失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取智能补全建议失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 词汇预测（基于高级混合模型）
+@app.post("/api/prompts/word-predictions")
+async def get_word_predictions(request: AutoCompletionRequest):
+    """获取下一个词的概率预测（基于高级Transformer+N-gram混合模型）"""
+    try:
+        if request.partial_input:
+            # 优先使用高级Transformer混合服务的词汇预测
+            from services.intelligent_completion_service import get_advanced_word_predictions
+            predictions = get_advanced_word_predictions(request.partial_input, top_k=8)
+            
+            return JSONResponse(
+                content={
+                    "predictions": predictions,
+                    "partial_input": request.partial_input,
+                    "count": len(predictions),
+                    "type": "advanced_hybrid",
+                    "status": "success"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                content={
+                    "predictions": [],
+                    "partial_input": "",
+                    "count": 0,
+                    "type": "advanced_hybrid",
+                    "status": "empty_input"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"获取高级词汇预测时出错: {e}")
+        # 降级到原始智能补全服务
+        try:
+            from services.prompt_service import get_prompt_service
+            prompt_service = get_prompt_service()
+            predictions = prompt_service.get_word_predictions(request.partial_input, top_k=8)
+            
+            return JSONResponse(
+                content={
+                    "predictions": predictions,
+                    "partial_input": request.partial_input,
+                    "count": len(predictions),
+                    "type": "basic_ngram_fallback",
+                    "status": "fallback_to_basic",
+                    "fallback_reason": str(e)
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        except Exception as e2:
+            logger.error(f"降级到基础词汇预测也失败: {e2}")
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": f"获取词汇预测失败: {str(e)}",
+                    "fallback_error": str(e2),
+                    "type": "advanced_hybrid",
+                    "status": "error"
+                },
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+
+# 获取特定提示词模板详情
+@app.get("/api/prompts/template/{template_id}")
+async def get_prompt_template_detail(template_id: str):
+    """获取特定提示词模板的详细信息"""
+    try:
+        prompt_service = get_prompt_service()
+        template = prompt_service.get_template_by_id(template_id)
+        
+        if not template:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "提示词模板不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 找到模板所属的分类
+        category = None
+        for cat, templates in prompt_service.prompt_templates.items():
+            if any(t["id"] == template_id for t in templates):
+                category = cat
+                break
+        
+        template["category"] = category
+        
+        return JSONResponse(
+            content={"template": template},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取提示词模板详情失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取提示词模板详情失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 模型缓存管理API
+@app.get("/api/models/cache-info")
+async def get_cache_info():
+    """获取模型缓存信息"""
+    try:
+        from config.model_paths import get_model_path_config
+        config = get_model_path_config()
+        cache_info = config.get_cache_info()
+        
+        # 转换字节为人类可读格式
+        def format_size(size_bytes):
+            for unit in ['B', 'KB', 'MB', 'GB']:
+                if size_bytes < 1024:
+                    return f"{size_bytes:.1f} {unit}"
+                size_bytes /= 1024
+            return f"{size_bytes:.1f} TB"
+        
+        for dir_info in cache_info['directories'].values():
+            dir_info['size_human'] = format_size(dir_info['size_bytes'])
+        
+        return JSONResponse(
+            content={
+                "cache_info": cache_info,
+                "status": "success"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取缓存信息失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取缓存信息失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取可用的API模型列表（DeepSeek）
+@app.get("/api/models/transformer/available")
+async def get_available_transformer_models():
+    """获取所有可用的API模型（现在使用DeepSeek）"""
+    try:
+        # 现在使用DeepSeek API，返回简化的模型信息
+        models = {
+            "deepseek-chat": {
+                "name": "DeepSeek Chat",
+                "description": "DeepSeek高质量对话模型，专注于智能补全",
+                "memory_usage": "低（API调用）",
+                "quality": "优秀",
+                "speed": "快速"
+            }
+        }
+        
+        recommendations = {
+            "low_memory": "deepseek-chat",
+            "moderate_memory": "deepseek-chat", 
+            "high_memory": "deepseek-chat"
+        }
+        
+        return JSONResponse(
+            content={
+                "available_models": models,
+                "recommendations": recommendations,
+                "current_default": "deepseek-chat",
+                "status": "success"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取API模型列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取模型列表失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 切换API模型（DeepSeek）
+@app.post("/api/models/transformer/switch")
+async def switch_transformer_model(request: dict):
+    """切换当前使用的API模型（现在固定为DeepSeek）"""
+    try:
+        new_model = request.get("model_key", "deepseek-chat")
+        
+        # 现在只支持DeepSeek模型
+        available_models = ["deepseek-chat", "auto"]
+        
+        if new_model not in available_models:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": f"模型 {new_model} 不在可用列表中，当前只支持 DeepSeek"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # DeepSeek API无需切换，始终可用
+        model_info = {
+            "name": "DeepSeek Chat",
+            "description": "DeepSeek高质量对话模型，专注于智能补全",
+            "status": "已激活"
+        }
+        
+        return JSONResponse(
+            content={
+                "message": f"当前使用模型: DeepSeek Chat",
+                "model_info": model_info,
+                "status": "success"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+            
+    except Exception as e:
+        logger.error(f"切换API模型失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"切换模型失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 获取当前API模型状态（DeepSeek）
+@app.get("/api/models/transformer/status")
+async def get_transformer_model_status():
+    """获取当前API模型的状态信息（DeepSeek）"""
+    try:
+        from services.deepseek_api_service import get_deepseek_api_service
+        
+        deepseek_service = get_deepseek_api_service()
+        
+        status_info = {
+            "is_initialized": True,
+            "current_model": "DeepSeek Chat",
+            "preferred_model": "deepseek-chat",
+            "device": "API远程调用",
+            "cache_size": 0,  # API调用不使用本地缓存
+            "is_available": deepseek_service.is_available()
+        }
+        
+        # 添加DeepSeek API详细信息
+        status_info["model_details"] = {
+            "name": "DeepSeek Chat",
+            "description": "DeepSeek高质量对话模型，专注于智能补全",
+            "type": "API调用",
+            "provider": "DeepSeek",
+            "memory_usage": "低（无本地模型）",
+            "quality": "优秀",
+            "speed": "快速"
+        }
+        
+        return JSONResponse(
+            content={
+                "status": status_info,
+                "message": "状态获取成功"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"获取API模型状态失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"获取模型状态失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 增强自动补全（使用高质量Transformer模型）
+@app.post("/api/prompts/advanced-autocomplete")
+async def advanced_autocomplete(request: dict):
+    """增强自动补全API - 使用高质量Transformer模型"""
+    try:
+        partial_input = request.get("partial_input", "")
+        max_completions = request.get("max_completions", 5)
+        
+        if not partial_input or len(partial_input.strip()) < 1:
+            return JSONResponse(
+                content={"completions": []},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 使用增强的智能补全服务
+        from services.intelligent_completion_service import get_advanced_intelligent_completions
+        
+        logger.info(f"🚀 增强自动补全请求: {partial_input[:50]}...")
+        
+        completions = get_advanced_intelligent_completions(partial_input, max_completions)
+        
+        logger.info(f"✅ 返回 {len(completions)} 个增强补全建议")
+        
+        return JSONResponse(
+            content={
+                "completions": completions,
+                "model_type": "enhanced_transformer",
+                "input_length": len(partial_input),
+                "status": "success"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"增强自动补全失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"增强自动补全失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# 增强词汇预测（使用高质量Transformer模型）
+@app.post("/api/prompts/advanced-word-predictions")
+async def advanced_word_predictions(request: dict):
+    """增强词汇预测API - 使用高质量Transformer模型"""
+    try:
+        partial_input = request.get("partial_input", "")
+        top_k = request.get("top_k", 8)
+        
+        if not partial_input or len(partial_input.strip()) < 1:
+            return JSONResponse(
+                content={"predictions": []},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 使用增强的词汇预测服务
+        from services.intelligent_completion_service import get_advanced_word_predictions
+        
+        logger.info(f"🧠 增强词汇预测请求: {partial_input[:50]}...")
+        
+        predictions = get_advanced_word_predictions(partial_input, top_k)
+        
+        logger.info(f"✅ 返回 {len(predictions)} 个增强词汇预测")
+        
+        return JSONResponse(
+            content={
+                "predictions": predictions,
+                "model_type": "enhanced_transformer", 
+                "context_length": len(partial_input),
+                "status": "success"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"增强词汇预测失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"增强词汇预测失败: {str(e)}"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# DeepSeek词汇预测（替代混合预测）
+@app.post("/api/prompts/hybrid-word-predictions")
+async def hybrid_word_predictions(request: dict):
+    """DeepSeek词汇预测API - 使用DeepSeek API替代混合预测"""
+    try:
+        partial_input = request.get("partial_input", "")
+        top_k = request.get("top_k", 8)
+        
+        if not partial_input:
+            return JSONResponse(
+                content={"predictions": []},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        # 使用DeepSeek API预测服务
+        from services.intelligent_completion_service import get_advanced_word_predictions
+        
+        logger.info(f"🤖 DeepSeek词汇预测请求: {partial_input[:50]}...")
+        
+        predictions = get_advanced_word_predictions(partial_input, top_k)
+        
+        logger.info(f"✅ 返回 {len(predictions)} 个DeepSeek词汇预测")
+        
+        return JSONResponse(
+            content={
+                "predictions": predictions,
+                "model_type": "deepseek_api",
+                "context_length": len(partial_input),
+                "status": "success"
+            },
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"DeepSeek词汇预测失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"DeepSeek词汇预测失败: {str(e)}"},
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"
