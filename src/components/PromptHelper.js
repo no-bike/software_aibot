@@ -210,21 +210,36 @@ const PromptHelper = ({ open, onClose, onApplyPrompt, userInput, setUserInput })
         maxWidth="md" 
         fullWidth
         PaperProps={{
-          sx: { height: '80vh', display: 'flex', flexDirection: 'column' }
+          sx: { 
+            height: '80vh', 
+            display: 'flex', 
+            flexDirection: 'column',
+            '& .MuiDialogTitle-root': {
+              borderBottom: 'none',
+            }
+          }
         }}
       >
-        <DialogTitle sx={{ pb: 1 }}>
+        <DialogTitle sx={{ pb: 2, pt: 3, borderBottom: 'none' }}>
           <Box display="flex" alignItems="center" gap={1}>
             <LightbulbIcon color="primary" />
             <Typography variant="h6">智能提示词助手</Typography>
           </Box>
         </DialogTitle>
         
-        <DialogContent sx={{ flex: 1, overflow: 'hidden' }}>
+        <DialogContent sx={{ 
+          flex: 1, 
+          overflow: 'hidden', 
+          pt: 1, 
+          '&.MuiDialogContent-root': { 
+            paddingTop: '8px',
+            borderTop: 'none'
+          } 
+        }}>
           <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
             
             {/* 搜索和筛选 */}
-            <Box display="flex" gap={2} alignItems="center">
+            <Box display="flex" gap={2} alignItems="center" sx={{ mb: 1, mt: 0 }}>
               <TextField
                 label="搜索模板"
                 variant="outlined"
@@ -236,15 +251,62 @@ const PromptHelper = ({ open, onClose, onApplyPrompt, userInput, setUserInput })
                 }}
                 sx={{ flex: 1 }}
               />
-              <FormControl size="small" sx={{ minWidth: 150 }}>
-                <InputLabel>分类</InputLabel>
+              <FormControl size="small" sx={{ minWidth: 100, zIndex: 1 }}>
+                <InputLabel 
+                  id="category-select-label" 
+                  sx={{ 
+                    zIndex: 1000,
+                    color: 'text.secondary',
+                    backgroundColor: 'transparent',
+                    '&.Mui-focused': {
+                      color: 'text.secondary',
+                      zIndex: 1000
+                    },
+                    '&.MuiInputLabel-shrink': {
+                      color: 'text.secondary',
+                      zIndex: 1000,
+                      backgroundColor: 'white',
+                      paddingX: 0.5
+                    }
+                  }}
+                >
+                  分类
+                </InputLabel>
                 <Select
+                  labelId="category-select-label"
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
                   label="分类"
+                  sx={{
+                    width: 100,
+                    zIndex: 1,
+                    '& .MuiInputLabel-root': {
+                      fontSize: '0.875rem',
+                      zIndex: 1000,
+                    },
+                    '& .MuiSelect-select': {
+                      fontSize: '0.875rem',
+                      paddingRight: '24px !important',
+                      zIndex: 1
+                    },
+                    '& .MuiOutlinedInput-notchedOutline': {
+                      borderColor: 'rgba(0, 0, 0, 0.23)',
+                      zIndex: 1
+                    },
+                    '& .MuiInputBase-root': {
+                      zIndex: 1
+                    }
+                  }}
+                  MenuProps={{
+                    PaperProps: {
+                      sx: { zIndex: 9999 }
+                    }
+                  }}
                 >
                   {categories.map(category => (
-                    <MenuItem key={category} value={category}>{category}</MenuItem>
+                    <MenuItem key={category} value={category} sx={{ fontSize: '0.875rem' }}>
+                      {category}
+                    </MenuItem>
                   ))}
                 </Select>
               </FormControl>
