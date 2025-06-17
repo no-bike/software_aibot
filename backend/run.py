@@ -28,7 +28,7 @@ if __name__ == "__main__":
     
     if 'SPARKX1' in config:
         # 注意：api.txt中是API_TOKEN，但服务需要SPARKX1_API_KEY
-        os.environ["SPARKX1_API_KEY"] = config['SPARKX1']['API_TOKEN']  # 从API_TOKEN读取
+        os.environ["SPARKX1_API_KEY"] = config['SPARKX1']['API_KEY']  # 从API_TOKEN读取
         os.environ["SPARKX1_API_BASE"] = config['SPARKX1']['API_BASE']
         print(f"✅ 已设置 SPARKX1 API 配置")
     

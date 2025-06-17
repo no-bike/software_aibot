@@ -35,6 +35,31 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# 全局异常处理器
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """全局异常处理器，捕获所有未处理的异常"""
+    if isinstance(exc, asyncio.CancelledError):
+        logger.warning("请求被客户端取消")
+        return JSONResponse(
+            status_code=499,  # Client Closed Request
+            content={"detail": "请求被客户端取消"},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    
+    logger.error(f"全局异常处理器捕获异常: {str(exc)}\n{traceback.format_exc()}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"服务器内部错误: {str(exc)}"},
+        headers={
+            "Access-Control-Allow-Origin": "http://localhost:3000",
+            "Access-Control-Allow-Credentials": "true"
+        }
+    )
+
 # 配置CORS
 app.add_middleware(
     CORSMiddleware,
@@ -175,6 +200,20 @@ async def startup_event():
             logger.info(f"📁 使用默认Transformer缓存目录: {transformer_cache_dir}")
         
         await mongodb_service.connect()
+        
+        # 💾 恢复用户模型配置到环境变量
+        try:
+            # 恢复默认用户的模型配置
+            env_vars = await mongodb_service.restore_models_to_environment("default_user")
+            if env_vars:
+                logger.info(f"✅ 已恢复 {len(env_vars)} 个模型环境变量")
+                for var_name in env_vars.keys():
+                    logger.info(f"📝 恢复环境变量: {var_name}")
+            else:
+                logger.info("📝 未找到需要恢复的模型配置")
+        except Exception as e:
+            logger.warning(f"⚠️ 恢复模型配置失败: {str(e)}")
+        
         logger.info("✅ Application started successfully")
     except Exception as e:
         logger.error(f"❌ Failed to start application: {str(e)}")
@@ -190,13 +229,110 @@ async def shutdown_event():
 
 
 @app.get("/api/models")
-async def get_models():
-    return JSONResponse(content=list(models.values()))
+async def get_models(req: Request):
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        logger.info(f"获取模型列表 for user: {user_id}")
+        
+        # 🚀 集成方法一：同时获取BaseModelService注册的模型和MongoDB保存的模型
+        model_list = []
+        
+        # 💾 从MongoDB获取用户保存的模型配置
+        try:
+            user_models = await mongodb_service.get_all_user_models(user_id)
+            for model_config in user_models:
+                model_list.append({
+                    "id": model_config["id"],
+                    "name": model_config["name"],
+                    "apiKey": "***hidden***",  # 不显示真实API密钥
+                    "url": model_config.get("apiBase", ""),
+                    "available": True,
+                    "source": "database",
+                    "description": model_config.get("description", ""),
+                    "type": model_config.get("type", "custom"),
+                    "createdAt": model_config.get("createdAt", ""),
+                    "updatedAt": model_config.get("updatedAt", "")
+                })
+            
+            logger.info(f"✅ 从MongoDB获取到 {len(user_models)} 个用户模型")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ 从MongoDB获取用户模型失败: {str(e)}")
+        
+        # 获取传统模型列表
+        for model_id, model_info in models.items():
+            # 避免重复添加（如果数据库中已有）
+            if not any(m["id"] == model_id for m in model_list):
+                model_list.append({
+                    "id": model_id,
+                    "name": model_info.get("name", model_id),
+                    "apiKey": model_info.get("apiKey", ""),
+                    "url": model_info.get("url", ""),
+                    "available": True,
+                    "source": "traditional"
+                })
+        
+        # 🔥 获取BaseModelService注册的模型
+        try:
+            from services.model_registry import model_registry
+            
+            # 刷新模型可用性
+            model_registry.refresh_model_availability()
+            
+            # 获取注册系统中的模型
+            registered_models = model_registry.get_all_models()
+            
+            for model_config in registered_models:
+                # 避免重复添加（如果传统系统和数据库都有）
+                if not any(m["id"] == model_config["id"] for m in model_list):
+                    model_list.append({
+                        "id": model_config["id"],
+                        "name": model_config["name"],
+                        "apiKey": "***hidden***",  # 不显示真实API密钥
+                        "url": "***configured***",  # 不显示真实URL
+                        "available": model_config["available"],
+                        "source": "base_service",
+                        "description": model_config.get("description", "")
+                    })
+            
+            logger.info(f"✅ 获取到 {len(registered_models)} 个BaseService注册模型")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ 获取BaseModelService模型失败: {str(e)}")
+        
+        logger.info(f"📋 返回模型列表，共 {len(model_list)} 个模型")
+        
+        return JSONResponse(
+            content=model_list,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取模型列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
 
 @app.post("/api/models")
-async def add_model(model: Model):
+async def add_model(model: Model, req: Request):
     try:
-        logger.info(f"收到添加模型请求: {model.id}")
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        logger.info(f"收到添加模型请求: {model.id} for user: {user_id}")
         
         # 验证必要字段
         if not model.id or not model.name or not model.apiKey:
@@ -211,8 +347,9 @@ async def add_model(model: Model):
                 }
             )
         
-        # 检查模型ID是否已存在
-        if model.id in models:
+        # 检查模型ID是否已存在（检查MongoDB和内存）
+        existing_model = await mongodb_service.get_user_model(model.id, user_id)
+        if existing_model or model.id in models:
             error_msg = f"模型ID {model.id} 已存在"
             logger.error(error_msg)
             return JSONResponse(
@@ -224,13 +361,75 @@ async def add_model(model: Model):
                 }
             )
         
-        # 添加模型
-        model_dict = model.dict(exclude_unset=True)  # 只包含已设置的字段
+        # 准备模型配置数据
+        model_config = {
+            "id": model.id,
+            "name": model.name,
+            "apiKey": model.apiKey,
+            "apiBase": model.url,
+            "type": "custom",
+            "description": f"用户添加的自定义模型: {model.name}",
+            "maxTokens": 4000,
+            "temperature": 0.7,
+            "streamSupport": True,
+            "isActive": True
+        }
+        
+        # 💾 保存到MongoDB数据库
+        db_success = await mongodb_service.save_user_model(model_config, user_id)
+        if not db_success:
+            error_msg = "保存模型配置到数据库失败"
+            logger.error(error_msg)
+            return JSONResponse(
+                status_code=500,
+                content={"detail": error_msg},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
+        logger.info(f"✅ 模型配置已保存到MongoDB: {model.id} for user: {user_id}")
+        
+        # 🚀 集成方法一：使用BaseModelService架构
+        try:
+            from services.model_registry import add_custom_model
+            
+            # 设置环境变量（用于API调用）
+            import os
+            api_key_env = f"{model.id.upper()}_API_KEY"
+            api_base_env = f"{model.id.upper()}_API_BASE"
+            
+            os.environ[api_key_env] = model.apiKey
+            os.environ[api_base_env] = model.url
+            
+            # 使用方法一添加到模型注册系统
+            add_custom_model(
+                model_id=model.id,
+                api_key_env=api_key_env,
+                api_base_env=api_base_env,
+                display_name=model.name,
+                model_name=model.name.lower().replace(' ', '-'),
+                description=f"用户添加的自定义模型: {model.name}"
+            )
+            
+            logger.info(f"✅ 成功将模型 {model.id} 注册到BaseModelService系统")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ 注册到BaseModelService失败，继续使用传统方式: {str(e)}")
+        
+        # 添加到传统模型字典（保持兼容性）
+        model_dict = model.dict(exclude_unset=True)
         models[model.id] = model_dict
         logger.info(f"成功添加模型: {model.id}")
         
         return JSONResponse(
-            content=model_dict,
+            content={
+                **model_dict,
+                "registered_to_base_service": True,
+                "saved_to_database": db_success,
+                "message": "模型已成功添加、保存到数据库并注册到服务系统"
+            },
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"
@@ -278,18 +477,31 @@ async def chat(request: MessageRequest, req: Request):
                 }
             )
         
-        # 验证所有模型ID
+        # 验证所有模型ID（检查内存和MongoDB）
         for model_id in request.modelIds:
             if model_id not in models:
-                logger.error(f"找不到模型ID: {model_id}")
-                return JSONResponse(
-                    status_code=400,
-                    content={"detail": f"找不到模型ID {model_id}"},
-                    headers={
-                        "Access-Control-Allow-Origin": "http://localhost:3000",
-                        "Access-Control-Allow-Credentials": "true"
+                # 如果内存中没有，尝试从MongoDB获取用户模型配置
+                user_model = await mongodb_service.get_user_model(model_id, user_id)
+                if user_model:
+                    # 将用户模型配置加载到内存中
+                    models[model_id] = {
+                        "id": user_model["id"],
+                        "name": user_model["name"],
+                        "apiKey": user_model["apiKey"],
+                        "url": user_model["apiBase"],
+                        "source": "database"
                     }
-                )
+                    logger.info(f"✅ 从MongoDB动态加载模型配置: {model_id}")
+                else:
+                    logger.error(f"找不到模型ID: {model_id}")
+                    return JSONResponse(
+                        status_code=400,
+                        content={"detail": f"找不到模型ID {model_id}"},
+                        headers={
+                            "Access-Control-Allow-Origin": "http://localhost:3000",
+                            "Access-Control-Allow-Credentials": "true"
+                        }
+                    )
         
         # 获取或创建会话
         conversation = None
@@ -323,6 +535,68 @@ async def chat(request: MessageRequest, req: Request):
             conversation["messages"].append(user_message)
             logger.info(f"添加用户消息到会话: {user_message}")
         
+        # 通用的流式响应包装函数
+        async def create_stream_wrapper(stream_generator, model_id):
+            """创建带异常处理的流式响应包装器"""
+            collected_content = ""
+            chunk_count = 0
+            try:
+                async for chunk in stream_generator:
+                    chunk_count += 1
+                    # 解析SSE格式的数据，提取content
+                    lines = chunk.strip().split('\n')
+                    for line in lines:
+                        if line.startswith('data: '):
+                            data_str = line[6:].strip()
+                            if data_str and data_str != '[DONE]':
+                                try:
+                                    import json
+                                    data = json.loads(data_str)
+                                    if 'choices' in data and len(data['choices']) > 0:
+                                        delta = data['choices'][0].get('delta', {})
+                                        if 'content' in delta:
+                                            collected_content += delta['content']
+                                except json.JSONDecodeError:
+                                    # 如果不是JSON格式，可能是原始文本，直接添加
+                                    if not data_str.startswith('data:') and data_str:
+                                        collected_content += data_str
+                                except Exception as e:
+                                    logger.debug(f"解析流数据块失败: {e}")
+                    yield chunk
+                    
+            except asyncio.CancelledError:
+                logger.warning(f"{model_id}模型流式响应被客户端取消")
+                # 连接被取消，重新抛出异常让上层处理
+                raise
+            except Exception as e:
+                logger.error(f"{model_id}流式响应错误: {str(e)}")
+                try:
+                    error_data = {
+                        "error": str(e),
+                        "model": model_id
+                    }
+                    yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                    yield f"data: [DONE]\n\n"
+                except Exception:
+                    # 如果连错误信息都无法发送，则静默忽略
+                    pass
+            finally:
+                # 流式响应结束后保存AI回复
+                if collected_content.strip() and conversation:
+                    ai_message = {
+                        "content": collected_content.strip(),
+                        "role": "assistant",
+                        "model": model_id,
+                        "timestamp": get_beijing_time().isoformat()
+                    }
+                    try:
+                        await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                        logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
+                    except Exception as e:
+                        logger.error(f"保存AI响应失败: {e}")
+                else:
+                    logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
+
         # 单个模型时使用流式响应
         if len(request.modelIds) == 1:
             model_id = request.modelIds[0]
@@ -347,51 +621,8 @@ async def chat(request: MessageRequest, req: Request):
                 logger.info(f"正在流式调用模型 {model_id} 的API")
                 
                 if model_id == "deepseek-chat":
-                    # 创建一个包装的流式生成器，在结束后保存消息
-                    async def stream_with_save():
-                        collected_content = ""
-                        chunk_count = 0
-                        async for chunk in get_deepseek_stream_response(request.message, history):
-                            chunk_count += 1
-                            # 解析SSE格式的数据，提取content
-                            lines = chunk.strip().split('\n')
-                            for line in lines:
-                                if line.startswith('data: '):
-                                    data_str = line[6:].strip()
-                                    if data_str and data_str != '[DONE]':
-                                        try:
-                                            import json
-                                            data = json.loads(data_str)
-                                            if 'choices' in data and len(data['choices']) > 0:
-                                                delta = data['choices'][0].get('delta', {})
-                                                if 'content' in delta:
-                                                    collected_content += delta['content']
-                                        except json.JSONDecodeError:
-                                            # 如果不是JSON格式，可能是原始文本，直接添加
-                                            if not data_str.startswith('data:') and data_str:
-                                                collected_content += data_str
-                                        except Exception as e:
-                                            logger.debug(f"解析流数据块失败: {e}")
-                            yield chunk
-                        
-                        # 流式响应结束后保存AI回复
-                        if collected_content.strip() and conversation:
-                            ai_message = {
-                                "content": collected_content.strip(),
-                                "role": "assistant",
-                                "model": model_id,
-                                "timestamp": get_beijing_time().isoformat()
-                            }
-                            try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
-                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
-                            except Exception as e:
-                                logger.error(f"保存AI响应失败: {e}")
-                        else:
-                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
-                    
                     return StreamingResponse(
-                        stream_with_save(),
+                        create_stream_wrapper(get_deepseek_stream_response(request.message, history), model_id),
                         media_type="text/event-stream",
                         headers={
                             "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -399,51 +630,8 @@ async def chat(request: MessageRequest, req: Request):
                         }
                     )
                 elif model_id == "sparkx1":
-                    # 创建一个包装的流式生成器，在结束后保存消息
-                    async def stream_with_save_sparkx1():
-                        collected_content = ""
-                        chunk_count = 0
-                        async for chunk in get_sparkx1_stream_response(request.message, history):
-                            chunk_count += 1
-                            # 解析SSE格式的数据，提取content
-                            lines = chunk.strip().split('\n')
-                            for line in lines:
-                                if line.startswith('data: '):
-                                    data_str = line[6:].strip()
-                                    if data_str and data_str != '[DONE]':
-                                        try:
-                                            import json
-                                            data = json.loads(data_str)
-                                            if 'choices' in data and len(data['choices']) > 0:
-                                                delta = data['choices'][0].get('delta', {})
-                                                if 'content' in delta:
-                                                    collected_content += delta['content']
-                                        except json.JSONDecodeError:
-                                            # 如果不是JSON格式，可能是原始文本，直接添加
-                                            if not data_str.startswith('data:') and data_str:
-                                                collected_content += data_str
-                                        except Exception as e:
-                                            logger.debug(f"解析流数据块失败: {e}")
-                            yield chunk
-                        
-                        # 流式响应结束后保存AI回复
-                        if collected_content.strip() and conversation:
-                            ai_message = {
-                                "content": collected_content.strip(),
-                                "role": "assistant", 
-                                "model": model_id,
-                                "timestamp": get_beijing_time().isoformat()
-                            }
-                            try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
-                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
-                            except Exception as e:
-                                logger.error(f"保存AI响应失败: {e}")
-                        else:
-                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
-                    
                     return StreamingResponse(
-                        stream_with_save_sparkx1(),
+                        create_stream_wrapper(get_sparkx1_stream_response(request.message, history), model_id),
                         media_type="text/event-stream",
                         headers={
                             "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -454,51 +642,8 @@ async def chat(request: MessageRequest, req: Request):
                     api_config = models.get(model_id)
                     if not api_config:
                         raise HTTPException(status_code=400, detail="Moonshot模型未配置")
-                    # 创建一个包装的流式生成器，在结束后保存消息
-                    async def stream_with_save_moonshot():
-                        collected_content = ""
-                        chunk_count = 0
-                        async for chunk in get_moonshot_stream_response(request.message, history, api_config):
-                            chunk_count += 1
-                            # 解析SSE格式的数据，提取content
-                            lines = chunk.strip().split('\n')
-                            for line in lines:
-                                if line.startswith('data: '):
-                                    data_str = line[6:].strip()
-                                    if data_str and data_str != '[DONE]':
-                                        try:
-                                            import json
-                                            data = json.loads(data_str)
-                                            if 'choices' in data and len(data['choices']) > 0:
-                                                delta = data['choices'][0].get('delta', {})
-                                                if 'content' in delta:
-                                                    collected_content += delta['content']
-                                        except json.JSONDecodeError:
-                                            # 如果不是JSON格式，可能是原始文本，直接添加
-                                            if not data_str.startswith('data:') and data_str:
-                                                collected_content += data_str
-                                        except Exception as e:
-                                            logger.debug(f"解析流数据块失败: {e}")
-                            yield chunk
-                        
-                        # 流式响应结束后保存AI回复
-                        if collected_content.strip() and conversation:
-                            ai_message = {
-                                "content": collected_content.strip(),
-                                "role": "assistant",
-                                "model": model_id,
-                                "timestamp": get_beijing_time().isoformat()
-                            }
-                            try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
-                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
-                            except Exception as e:
-                                logger.error(f"保存AI响应失败: {e}")
-                        else:
-                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
-                    
                     return StreamingResponse(
-                        stream_with_save_moonshot(),
+                        create_stream_wrapper(get_moonshot_stream_response(request.message, history, api_config), model_id),
                         media_type="text/event-stream",
                         headers={
                             "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -506,51 +651,8 @@ async def chat(request: MessageRequest, req: Request):
                         }
                     )
                 elif model_id == "qwen":
-                    # 创建一个包装的流式生成器，在结束后保存消息
-                    async def stream_with_save_qwen():
-                        collected_content = ""
-                        chunk_count = 0
-                        async for chunk in get_qwen_stream_response(request.message, history):
-                            chunk_count += 1
-                            # 解析SSE格式的数据，提取content
-                            lines = chunk.strip().split('\n')
-                            for line in lines:
-                                if line.startswith('data: '):
-                                    data_str = line[6:].strip()
-                                    if data_str and data_str != '[DONE]':
-                                        try:
-                                            import json
-                                            data = json.loads(data_str)
-                                            if 'choices' in data and len(data['choices']) > 0:
-                                                delta = data['choices'][0].get('delta', {})
-                                                if 'content' in delta:
-                                                    collected_content += delta['content']
-                                        except json.JSONDecodeError:
-                                            # 如果不是JSON格式，可能是原始文本，直接添加
-                                            if not data_str.startswith('data:') and data_str:
-                                                collected_content += data_str
-                                        except Exception as e:
-                                            logger.debug(f"解析流数据块失败: {e}")
-                            yield chunk
-                        
-                        # 流式响应结束后保存AI回复
-                        if collected_content.strip() and conversation:
-                            ai_message = {
-                                "content": collected_content.strip(),
-                                "role": "assistant",
-                                "model": model_id,
-                                "timestamp": get_beijing_time().isoformat()
-                            }
-                            try:
-                                await mongodb_service.save_message(request.conversationId, ai_message, user_id)
-                                logger.info(f"流式AI响应已保存到MongoDB: {model_id}, 长度: {len(collected_content)}, 块数: {chunk_count}")
-                            except Exception as e:
-                                logger.error(f"保存AI响应失败: {e}")
-                        else:
-                            logger.warning(f"没有收集到有效内容，不保存消息。收集内容: '{collected_content}', 会话: {conversation is not None}")
-                    
                     return StreamingResponse(
-                        stream_with_save_qwen(),
+                        create_stream_wrapper(get_qwen_stream_response(request.message, history), model_id),
                         media_type="text/event-stream",
                         headers={
                             "Access-Control-Allow-Origin": "http://localhost:3000",
@@ -605,84 +707,305 @@ async def chat(request: MessageRequest, req: Request):
                         "Access-Control-Allow-Origin": "http://localhost:3000",
                         "Access-Control-Allow-Credentials": "true"
                     }
-                )        # 多个模型时保持原有逻辑
-        responses = []
-        for model_id in request.modelIds:
-            try:
-                # 准备会话历史 - 从 MongoDB 获取最近的消息
-                history = []
-                if conversation:
-                    # 从 MongoDB 获取会话历史，限制最近 6 条消息
-                    recent_messages = await mongodb_service.get_conversation_history(
-                        request.conversationId, user_id, limit=6
-                    )
-                    
-                    # 排除刚刚添加的用户消息
-                    for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
-                        if msg["role"] in ["user", "assistant"]:
-                            history.append({
-                                "role": msg["role"],
-                                "content": msg["content"]
-                            })
-                    logger.info(f"会话历史 (最近{len(history)}条): 已加载")
-                
-                logger.info(f"正在调用模型 {model_id} 的API")
-                response_content = None
-                if model_id == "deepseek-chat":
-                    response_content = await get_deepseek_response(request.message, history)
-                elif model_id == "sparkx1":
-                    response_content = await get_sparkx1_response(request.message, history)
-                elif model_id == "moonshot":
-                    api_config = models.get(model_id)
-                    if not api_config:
-                        raise HTTPException(status_code=400, detail="Moonshot模型未配置")
-                    response_content = await get_moonshot_response(request.message, history, api_config)
-                elif model_id == "qwen":
-                    response_content = await get_qwen_response(request.message, history)
-                else:
-                    raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
-                
-                logger.info(f"收到AI响应: {response_content}")
-                
-                response = {
-                    "modelId": model_id,
-                    "content": response_content
-                }
-                responses.append(response)
-                  # 保存AI响应到 MongoDB
-                if conversation:
-                    ai_message = {
-                        "content": response_content,
-                        "role": "assistant",
-                        "model": model_id,
-                        "timestamp": get_beijing_time().isoformat()
-                    }
-                    await mongodb_service.save_message(request.conversationId, ai_message, user_id)
-                    logger.info(f"AI响应已保存到MongoDB: {model_id}")
-                    
-            except Exception as e:
-                error_msg = f"处理模型 {model_id} 的响应时发生错误: {str(e)}\n{traceback.format_exc()}"
-                logger.error(error_msg)
-                return JSONResponse(
-                    status_code=500,
-                    content={"detail": error_msg},
-                    headers={
-                        "Access-Control-Allow-Origin": "http://localhost:3000",
-                        "Access-Control-Allow-Credentials": "true"
-                    }
                 )
         
-        response_data = {"responses": responses}
-        logger.info(f"返回最终响应: {response_data}")
-        return JSONResponse(
-            status_code=200,
-            content=response_data,
-            headers={
-                "Access-Control-Allow-Origin": "http://localhost:3000",
-                "Access-Control-Allow-Credentials": "true",
-                "Content-Type": "application/json"
-            }
-        )
+        # 多个模型时使用并发流式响应
+        else:
+            # 准备会话历史 - 从 MongoDB 获取最近的消息
+            history = []
+            if conversation:
+                recent_messages = await mongodb_service.get_conversation_history(
+                    request.conversationId, user_id, limit=6
+                )
+                
+                # 排除刚刚添加的用户消息
+                for msg in recent_messages[:-1]:  # 不包含最后一条（刚添加的用户消息）
+                    if msg["role"] in ["user", "assistant"]:
+                        history.append({
+                            "role": msg["role"],
+                            "content": msg["content"]
+                        })
+                logger.info(f"会话历史 (最近{len(history)}条): 已加载")
+            
+            # 创建多模型并发流式响应生成器
+            async def multi_model_stream():
+                import asyncio
+                import json
+                
+                # 为每个模型创建流式处理函数
+                async def process_single_model_stream(model_id, queue):
+                    try:
+                        logger.info(f"🚀 开始流式调用模型: {model_id}")
+                        
+                        # 发送模型开始信号
+                        await queue.put({
+                            "type": "model_start",
+                            "modelId": model_id,
+                            "message": f"模型 {model_id} 开始思考..."
+                        })
+                        
+                        collected_content = ""
+                        
+                        # 根据模型类型调用对应的流式API
+                        if model_id == "deepseek-chat":
+                            async for chunk in get_deepseek_stream_response(request.message, history):
+                                # 解析流式数据
+                                lines = chunk.strip().split('\n')
+                                for line in lines:
+                                    if line.startswith('data: '):
+                                        data_str = line[6:].strip()
+                                        if data_str and data_str != '[DONE]':
+                                            try:
+                                                data = json.loads(data_str)
+                                                if 'choices' in data and len(data['choices']) > 0:
+                                                    delta = data['choices'][0].get('delta', {})
+                                                    if 'content' in delta:
+                                                        content_chunk = delta['content']
+                                                        collected_content += content_chunk
+                                                        
+                                                        # 实时发送字符块
+                                                        await queue.put({
+                                                            "type": "model_chunk",
+                                                            "modelId": model_id,
+                                                            "chunk": content_chunk,
+                                                            "accumulated": collected_content
+                                                        })
+                                            except json.JSONDecodeError:
+                                                pass
+                        
+                        elif model_id == "sparkx1":
+                            async for chunk in get_sparkx1_stream_response(request.message, history):
+                                lines = chunk.strip().split('\n')
+                                for line in lines:
+                                    if line.startswith('data: '):
+                                        data_str = line[6:].strip()
+                                        if data_str and data_str != '[DONE]':
+                                            try:
+                                                data = json.loads(data_str)
+                                                if 'choices' in data and len(data['choices']) > 0:
+                                                    delta = data['choices'][0].get('delta', {})
+                                                    if 'content' in delta:
+                                                        content_chunk = delta['content']
+                                                        collected_content += content_chunk
+                                                        
+                                                        await queue.put({
+                                                            "type": "model_chunk",
+                                                            "modelId": model_id,
+                                                            "chunk": content_chunk,
+                                                            "accumulated": collected_content
+                                                        })
+                                            except json.JSONDecodeError:
+                                                pass
+                        
+                        elif model_id == "moonshot":
+                            api_config = models.get(model_id)
+                            if not api_config:
+                                raise HTTPException(status_code=400, detail="Moonshot模型未配置")
+                            async for chunk in get_moonshot_stream_response(request.message, history, api_config):
+                                lines = chunk.strip().split('\n')
+                                for line in lines:
+                                    if line.startswith('data: '):
+                                        data_str = line[6:].strip()
+                                        if data_str and data_str != '[DONE]':
+                                            try:
+                                                data = json.loads(data_str)
+                                                if 'choices' in data and len(data['choices']) > 0:
+                                                    delta = data['choices'][0].get('delta', {})
+                                                    if 'content' in delta:
+                                                        content_chunk = delta['content']
+                                                        collected_content += content_chunk
+                                                        
+                                                        await queue.put({
+                                                            "type": "model_chunk",
+                                                            "modelId": model_id,
+                                                            "chunk": content_chunk,
+                                                            "accumulated": collected_content
+                                                        })
+                                            except json.JSONDecodeError:
+                                                pass
+                        
+                        elif model_id == "qwen":
+                            async for chunk in get_qwen_stream_response(request.message, history):
+                                lines = chunk.strip().split('\n')
+                                for line in lines:
+                                    if line.startswith('data: '):
+                                        data_str = line[6:].strip()
+                                        if data_str and data_str != '[DONE]':
+                                            try:
+                                                data = json.loads(data_str)
+                                                if 'choices' in data and len(data['choices']) > 0:
+                                                    delta = data['choices'][0].get('delta', {})
+                                                    if 'content' in delta:
+                                                        content_chunk = delta['content']
+                                                        collected_content += content_chunk
+                                                        
+                                                        await queue.put({
+                                                            "type": "model_chunk",
+                                                            "modelId": model_id,
+                                                            "chunk": content_chunk,
+                                                            "accumulated": collected_content
+                                                        })
+                                            except json.JSONDecodeError:
+                                                pass
+                        else:
+                            raise HTTPException(status_code=400, detail=f"不支持的模型ID: {model_id}")
+                        
+                        logger.info(f"✅ 模型 {model_id} 流式响应完成，总长度: {len(collected_content)}")
+                        
+                        # 保存AI响应到 MongoDB
+                        if conversation and collected_content.strip():
+                            ai_message = {
+                                "content": collected_content.strip(),
+                                "role": "assistant",
+                                "model": model_id,
+                                "timestamp": get_beijing_time().isoformat()
+                            }
+                            await mongodb_service.save_message(request.conversationId, ai_message, user_id)
+                            logger.info(f"AI响应已保存到MongoDB: {model_id}")
+                        
+                        # 发送模型完成信号
+                        await queue.put({
+                            "type": "model_complete",
+                            "modelId": model_id,
+                            "content": collected_content,
+                            "status": "success"
+                        })
+                        
+                    except asyncio.CancelledError:
+                        logger.warning(f"❌ 模型 {model_id} 流式处理被客户端取消")
+                        try:
+                            await queue.put({
+                                "type": "model_complete",
+                                "modelId": model_id,
+                                "content": "请求被取消",
+                                "status": "cancelled"
+                            })
+                        except Exception:
+                            pass  # 队列可能已经关闭
+                        raise  # 重新抛出CancelledError
+                    except Exception as e:
+                        logger.error(f"❌ 模型 {model_id} 流式处理失败: {str(e)}")
+                        try:
+                            await queue.put({
+                                "type": "model_complete",
+                                "modelId": model_id,
+                                "content": f"错误: {str(e)}",
+                                "status": "error"
+                            })
+                        except Exception:
+                            pass  # 队列可能已经关闭
+                
+                # 创建队列用于收集所有模型的流式数据
+                queue = asyncio.Queue()
+                
+                # 创建所有模型的并发任务
+                tasks = [
+                    asyncio.create_task(process_single_model_stream(model_id, queue))
+                    for model_id in request.modelIds
+                ]
+                
+                # 发送开始信号
+                start_data = {
+                    "type": "start",
+                    "models": request.modelIds,
+                    "total": len(request.modelIds)
+                }
+                yield f"data: {json.dumps(start_data)}\n\n"
+                
+                # 实时处理队列中的数据
+                completed_models = 0
+                total_models = len(request.modelIds)
+                
+                try:
+                    while completed_models < total_models:
+                        try:
+                            # 等待队列中的数据，设置超时避免死锁
+                            stream_data = await asyncio.wait_for(queue.get(), timeout=30.0)
+                            
+                            # 立即发送流式数据
+                            yield f"data: {json.dumps(stream_data, ensure_ascii=False)}\n\n"
+                            
+                            # 检查是否有模型完成
+                            if stream_data.get("type") == "model_complete":
+                                completed_models += 1
+                                logger.info(f"模型完成: {stream_data.get('modelId')}, 进度: {completed_models}/{total_models}")
+                                
+                        except asyncio.TimeoutError:
+                            logger.warning(f"等待模型响应超时，已完成: {completed_models}/{total_models}")
+                            # 发送超时信息
+                            timeout_data = {
+                                "type": "timeout_warning",
+                                "message": f"部分模型响应超时，已完成 {completed_models}/{total_models} 个模型"
+                            }
+                            yield f"data: {json.dumps(timeout_data, ensure_ascii=False)}\n\n"
+                            break
+                        except asyncio.CancelledError:
+                            logger.warning("流式响应被客户端取消")
+                            break
+                        except Exception as e:
+                            logger.error(f"处理流式数据时发生错误: {str(e)}")
+                            # 发送错误信息但继续处理
+                            error_data = {
+                                "type": "error",
+                                "message": f"处理数据时发生错误: {str(e)}"
+                            }
+                            yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                            break
+                except asyncio.CancelledError:
+                    logger.warning("多模型流式响应被客户端取消")
+                    # 清理资源
+                    for task in tasks:
+                        if not task.done():
+                            try:
+                                task.cancel()
+                            except Exception:
+                                pass
+                    raise  # 重新抛出CancelledError
+                except Exception as e:
+                    logger.error(f"多模型流式响应发生严重错误: {str(e)}")
+                    try:
+                        error_data = {
+                            "type": "fatal_error",
+                            "message": f"系统错误: {str(e)}"
+                        }
+                        yield f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n"
+                    except Exception:
+                        pass  # 如果连错误信息都无法发送，则静默忽略
+                finally:
+                    # 确保清理所有任务
+                    for task in tasks:
+                        if not task.done():
+                            try:
+                                task.cancel()
+                            except Exception:
+                                pass
+                
+                # 等待所有任务完成
+                try:
+                    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    logger.warning("等待所有模型任务完成超时或被取消")
+                except Exception as e:
+                    logger.error(f"等待任务完成时发生错误: {str(e)}")
+                
+                # 发送完成信号
+                end_data = {
+                    "type": "all_complete",
+                    "message": f"所有 {total_models} 个模型已完成响应"
+                }
+                yield f"data: {json.dumps(end_data)}\n\n"
+                yield f"data: [DONE]\n\n"
+            
+            return StreamingResponse(
+                multi_model_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true",
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive"
+                }
+            )
     
     except Exception as e:
         error_msg = f"处理聊天请求时发生错误: {str(e)}\n{traceback.format_exc()}"
@@ -911,22 +1234,20 @@ async def fusion_status():
         )
 
 @app.delete("/api/models/{model_id}")
-async def delete_model(model_id: str):
+async def delete_model(model_id: str, req: Request):
     try:
-        logger.info(f"收到删除模型请求: {model_id}")
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        logger.info(f"收到删除模型请求: {model_id} for user: {user_id}")
         
-        # 检查模型是否存在
-        if model_id not in models:
-            error_msg = f"模型 {model_id} 不存在"
-            logger.error(error_msg)
-            return JSONResponse(
-                status_code=404,
-                content={"detail": error_msg},
-                headers={
-                    "Access-Control-Allow-Origin": "http://localhost:3000",
-                    "Access-Control-Allow-Credentials": "true"
-                }
-            )
+        # 💾 从MongoDB删除模型配置
+        db_success = await mongodb_service.delete_user_model(model_id, user_id)
+        
+        # 检查传统模型字典
+        found_in_memory = model_id in models
         
         # 检查是否为默认模型
         if any(model["id"] == model_id for model in default_models):
@@ -941,17 +1262,47 @@ async def delete_model(model_id: str):
                 }
             )
         
+        if not db_success and not found_in_memory:
+            error_msg = f"模型 {model_id} 不存在"
+            logger.error(error_msg)
+            return JSONResponse(
+                status_code=404,
+                content={"detail": error_msg},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        
         # 从选中的模型列表中移除
         global selected_models
         if model_id in selected_models:
             selected_models.remove(model_id)
         
-        # 删除模型
-        deleted_model = models.pop(model_id)
-        logger.info(f"成功删除模型: {model_id}")
+        # 从传统模型字典删除
+        deleted_model = None
+        if found_in_memory:
+            deleted_model = models.pop(model_id)
+        
+        # 从环境变量中删除相关配置
+        import os
+        api_key_env = f"{model_id.upper()}_API_KEY"
+        api_base_env = f"{model_id.upper()}_API_BASE"
+        
+        if api_key_env in os.environ:
+            del os.environ[api_key_env]
+        if api_base_env in os.environ:
+            del os.environ[api_base_env]
+        
+        logger.info(f"✅ 模型已删除: {model_id} (数据库: {db_success}, 内存: {found_in_memory})")
         
         return JSONResponse(
-            content={"message": f"模型 {model_id} 已成功删除", "model": deleted_model},
+            content={
+                "message": f"模型 {model_id} 已成功删除",
+                "model": deleted_model,
+                "deleted_from_database": db_success,
+                "deleted_from_memory": found_in_memory
+            },
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"
@@ -963,6 +1314,188 @@ async def delete_model(model_id: str):
         return JSONResponse(
             status_code=500,
             content={"detail": error_msg},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+# ==================== 模型管理API端点 ====================
+
+@app.get("/api/models/statistics")
+async def get_model_statistics(req: Request):
+    """获取用户模型统计信息"""
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        stats = await mongodb_service.get_model_statistics(user_id)
+        
+        return JSONResponse(
+            content=stats,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取模型统计信息失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.get("/api/models/export")
+async def export_user_models(req: Request):
+    """导出用户的所有模型配置"""
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        export_data = await mongodb_service.export_user_models(user_id)
+        
+        return JSONResponse(
+            content=export_data,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"导出模型配置失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.post("/api/models/import")
+async def import_user_models(import_data: dict, req: Request):
+    """导入用户模型配置"""
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        result = await mongodb_service.import_user_models(import_data, user_id)
+        
+        # 恢复环境变量
+        if result.get("success", False):
+            await mongodb_service.restore_models_to_environment(user_id)
+        
+        return JSONResponse(
+            content=result,
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+    except Exception as e:
+        logger.error(f"导入模型配置失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.put("/api/models/{model_id}")
+async def update_user_model(model_id: str, updates: dict, req: Request):
+    """更新用户模型配置"""
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        success = await mongodb_service.update_user_model(model_id, updates, user_id)
+        
+        if success:
+            # 更新环境变量
+            if "apiKey" in updates:
+                import os
+                api_key_env = f"{model_id.upper()}_API_KEY"
+                os.environ[api_key_env] = updates["apiKey"]
+            
+            if "apiBase" in updates:
+                import os
+                api_base_env = f"{model_id.upper()}_API_BASE"
+                os.environ[api_base_env] = updates["apiBase"]
+            
+            return JSONResponse(
+                content={"message": f"模型 {model_id} 更新成功"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"模型 {model_id} 不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"更新模型配置失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
+            headers={
+                "Access-Control-Allow-Origin": "http://localhost:3000",
+                "Access-Control-Allow-Credentials": "true"
+            }
+        )
+
+@app.get("/api/models/{model_id}")
+async def get_user_model(model_id: str, req: Request):
+    """获取指定的用户模型配置"""
+    try:
+        # 从 cookie 中获取用户 ID
+        user_id = req.cookies.get("user_id")
+        if not user_id:
+            user_id = "default_user"  # 兼容未登录用户
+            
+        model_config = await mongodb_service.get_user_model(model_id, user_id)
+        
+        if model_config:
+            return JSONResponse(
+                content=model_config,
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"模型 {model_id} 不存在"},
+                headers={
+                    "Access-Control-Allow-Origin": "http://localhost:3000",
+                    "Access-Control-Allow-Credentials": "true"
+                }
+            )
+    except Exception as e:
+        logger.error(f"获取模型配置失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)},
             headers={
                 "Access-Control-Allow-Origin": "http://localhost:3000",
                 "Access-Control-Allow-Credentials": "true"

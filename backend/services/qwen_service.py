@@ -1,149 +1,57 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+通义千问服务
+
+基于BaseModelService的通义千问 API调用实现
+"""
+
 import os
-import httpx
-import logging
-from fastapi import HTTPException
 from typing import List, Dict
+from .base_model_service import BaseModelService
 
-logger = logging.getLogger(__name__)
-
-async def get_qwen_response(message: str, conversation_history: List[Dict] = None) -> str:
-    """调用通义千问 API获取响应"""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=120.0)) as client:
-        api_key = os.environ.get("QWEN_API_KEY", "")
-        api_base = os.environ.get("QWEN_API_BASE", "")
-        
-        if not api_key:
-            raise HTTPException(status_code=500, detail="未配置QWEN_API_KEY环境变量")
-        if not api_base:
-            raise HTTPException(status_code=500, detail="未配置QWEN_API_BASE环境变量")
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+class QwenService(BaseModelService):
+    """通义千问模型服务"""
+    
+    def __init__(self):
+        super().__init__("通义千问")
+    
+    def get_api_config(self) -> Dict[str, str]:
+        """获取通义千问 API配置"""
+        return {
+            "api_key": os.environ.get("QWEN_API_KEY", ""),
+            "api_base": os.environ.get("QWEN_API_BASE", "")
         }
-        
-        # 构建消息列表
+    
+    def build_request_payload(self, message: str, conversation_history: List[Dict] = None) -> Dict:
+        """构建通义千问请求载荷"""
         messages = []
         if conversation_history:
             messages.extend(conversation_history)
         messages.append({"role": "user", "content": message})
         
-        try:
-            logger.info(f"发送请求到通义千问 API: {api_base}")
-            logger.info(f"消息历史: {messages}")
-            
-            payload = {
-                "model": "qwen-plus",  # 可以配置为其他模型如 qwen-max, qwen-turbo
-                "messages": messages,
-                "max_tokens": 2000,
-                "temperature": 0.7,
-                "top_p": 0.8,
-                "stream": False
-            }
-            
-            response = await client.post(
-                api_base,
-                headers=headers,
-                json=payload,
-                timeout=90.0
-            )
-            
-            logger.info(f"通义千问 API响应状态码: {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"通义千问 API响应长度: {len(str(result))}")
-                
-                if "choices" in result and len(result["choices"]) > 0:
-                    content = result["choices"][0]["message"]["content"]
-                    logger.info(f"成功获取通义千问响应，内容长度: {len(content)}")
-                    return content
-                else:
-                    raise HTTPException(status_code=500, 
-                                      detail="通义千问 API返回的响应格式不正确")
-            else:
-                error_text = response.text
-                logger.error(f"通义千问 API错误响应: {error_text}")
-                raise HTTPException(status_code=response.status_code, 
-                                  detail=f"通义千问 API错误: {error_text}")
-                
-        except httpx.ReadTimeout:
-            logger.error("通义千问 API请求超时")
-            raise HTTPException(status_code=504, 
-                              detail="通义千问 API请求超时，请稍后重试")
-        except httpx.ConnectTimeout:
-            logger.error("通义千问 API连接超时")
-            raise HTTPException(status_code=503, 
-                              detail="通义千问 API连接超时，请检查网络连接")
-        except Exception as e:
-            logger.error(f"处理通义千问 API响应时发生错误: {str(e)}")
-            raise HTTPException(status_code=500, 
-                              detail=f"调用通义千问 API时发生错误: {str(e)}") 
+        return {
+            "model": "qwen-plus",  # 可以配置为其他模型如 qwen-max, qwen-turbo
+            "messages": messages,
+            "max_tokens": 2000,
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "stream": True  # 启用流式响应
+        }
+    
+    def get_api_endpoint(self, api_base: str) -> str:
+        """获取通义千问 API端点"""
+        return api_base
+
+# 创建全局实例
+_qwen_service = QwenService()
+
+# 兼容性函数，保持原有接口
+async def get_qwen_response(message: str, conversation_history: List[Dict] = None) -> str:
+    """调用通义千问 API获取响应（非流式）"""
+    return await _qwen_service.get_non_stream_response(message, conversation_history)
 
 async def get_qwen_stream_response(message: str, conversation_history: List[Dict] = None):
     """调用通义千问 API获取流式响应"""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=120.0)) as client:
-        api_key = os.environ.get("QWEN_API_KEY", "")
-        api_base = os.environ.get("QWEN_API_BASE", "")
-        
-        if not api_key:
-            raise HTTPException(status_code=500, detail="未配置QWEN_API_KEY环境变量")
-        if not api_base:
-            raise HTTPException(status_code=500, detail="未配置QWEN_API_BASE环境变量")
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        # 构建消息列表
-        messages = []
-        if conversation_history:
-            messages.extend(conversation_history)
-        messages.append({"role": "user", "content": message})
-        
-        try:
-            logger.info(f"发送流式请求到通义千问 API: {api_base}")
-            logger.info(f"消息历史: {messages}")
-            
-            payload = {
-                "model": "qwen-plus",  # 可以配置为其他模型如 qwen-max, qwen-turbo
-                "messages": messages,
-                "max_tokens": 2000,
-                "temperature": 0.7,
-                "top_p": 0.8,
-                "stream": True  # 启用流式响应
-            }
-            
-            async with client.stream(
-                "POST",
-                api_base,
-                headers=headers,
-                json=payload,
-                timeout=90.0
-            ) as response:
-                
-                logger.info(f"通义千问流式 API响应状态码: {response.status_code}")
-                
-                if response.status_code == 200:
-                    async for chunk in response.aiter_text():
-                        if chunk.strip():
-                            yield f"data: {chunk}\n\n"
-                else:
-                    error_text = await response.aread()
-                    logger.error(f"通义千问流式 API错误响应: {error_text}")
-                    raise HTTPException(status_code=response.status_code, 
-                                      detail=f"通义千问流式 API错误: {error_text}")
-                
-        except httpx.ReadTimeout:
-            logger.error("通义千问流式 API请求超时")
-            raise HTTPException(status_code=504, 
-                              detail="通义千问流式 API请求超时，请稍后重试")
-        except httpx.ConnectTimeout:
-            logger.error("通义千问流式 API连接超时")
-            raise HTTPException(status_code=503, 
-                              detail="通义千问流式 API连接超时，请检查网络连接")
-        except Exception as e:
-            logger.error(f"处理通义千问流式 API响应时发生错误: {str(e)}")
-            raise HTTPException(status_code=500, 
-                              detail=f"调用通义千问流式 API时发生错误: {str(e)}")
+    async for chunk in _qwen_service.get_stream_response(message, conversation_history):
+        yield chunk

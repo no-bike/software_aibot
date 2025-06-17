@@ -1,170 +1,56 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+DeepSeek服务
+
+基于BaseModelService的DeepSeek API调用实现
+"""
+
 import os
-import httpx
-import logging
-import asyncio
-from fastapi import HTTPException
 from typing import List, Dict
+from .base_model_service import BaseModelService
 
-logger = logging.getLogger(__name__)
-
-async def get_deepseek_response(message: str, conversation_history: List[Dict] = None) -> str:
-    """调用Deepseek API获取响应"""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=120.0)) as client:  # 增加超时时间
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        api_base = os.environ.get("DEEPSEEK_API_BASE", "")
-        
-        if not api_key:
-            raise HTTPException(status_code=500, detail="未配置DEEPSEEK_API_KEY环境变量")
-        if not api_base:
-            raise HTTPException(status_code=500, detail="未配置DEEPSEEK_API_BASE环境变量")
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        
-        messages = []
-        if conversation_history:
-            messages.extend(conversation_history)
-        messages.append({"role": "user", "content": message})
-        
-        try:
-            logger.info(f"发送请求到Deepseek API: {api_base}/chat/completions")
-            logger.info(f"消息历史: {messages}")
-            
-            payload = {
-                "model": "deepseek-chat",
-                "messages": messages,
-                "temperature": 0.7,
-                "max_tokens": 2000,
-                "stream": False  # 确保不使用流式响应
-            }
-            
-            response = await client.post(
-                f"{api_base}/chat/completions",
-                headers=headers,
-                json=payload
-            )
-            
-            logger.info(f"Deepseek API响应状态码: {response.status_code}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                logger.info(f"Deepseek API响应内容长度: {len(str(result))}")
-                if "choices" in result and len(result["choices"]) > 0:
-                    content = result["choices"][0]["message"]["content"]
-                    logger.info(f"成功获取Deepseek响应，内容长度: {len(content)}")
-                    return content
-                else:
-                    raise HTTPException(status_code=500, 
-                                      detail="Deepseek API返回的响应格式不正确")
-            else:
-                logger.error(f"Deepseek API错误响应: {response.text}")
-                raise HTTPException(status_code=response.status_code, 
-                                  detail=f"Deepseek API错误: {response.text}")
-        except httpx.TimeoutException:
-            logger.error("Deepseek API请求超时")
-            raise HTTPException(status_code=504, detail="请求Deepseek API超时，请稍后重试")
-        except httpx.RequestError as e:
-            logger.error(f"Deepseek API网络错误: {str(e)}")
-            raise HTTPException(status_code=502, detail=f"网络错误: {str(e)}")
-        except Exception as e:
-            logger.error(f"处理Deepseek API响应时发生错误: {str(e)}")
-            raise HTTPException(status_code=500, 
-                              detail=f"调用Deepseek API时发生错误: {str(e)}")
-
-async def get_deepseek_stream_response(message: str, conversation_history: List[Dict] = None):
-    """优化后的流式调用Deepseek API获取响应"""
-    MAX_RETRIES = 2
-    BUFFER_SIZE = 512  # 字节
-    CONNECT_TIMEOUT = 10.0
-    STREAM_TIMEOUT = 20.0
+class DeepSeekService(BaseModelService):
+    """DeepSeek模型服务"""
     
-    async with httpx.AsyncClient() as client:
-        api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        api_base = os.environ.get("DEEPSEEK_API_BASE", "")
-        
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
+    def __init__(self):
+        super().__init__("DeepSeek")
+    
+    def get_api_config(self) -> Dict[str, str]:
+        """获取DeepSeek API配置"""
+        return {
+            "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
+            "api_base": os.environ.get("DEEPSEEK_API_BASE", "")
         }
-        
+    
+    def build_request_payload(self, message: str, conversation_history: List[Dict] = None) -> Dict:
+        """构建DeepSeek请求载荷"""
         messages = []
         if conversation_history:
             messages.extend(conversation_history)
         messages.append({"role": "user", "content": message})
         
-        payload = {
+        return {
             "model": "deepseek-chat",
             "messages": messages,
             "temperature": 0.7,
             "max_tokens": 2000,
             "stream": True
         }
-        
-        buffer = ""
-        retry_count = 0
-        
-        while retry_count <= MAX_RETRIES:
-            try:
-                # 减少日志频率
-                if retry_count == 0:
-                    logger.info(f"发送流式请求到Deepseek API (尝试 {retry_count + 1}/{MAX_RETRIES + 1})")
-                
-                async with client.stream(
-                    "POST",
-                    f"{api_base}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                    timeout=httpx.Timeout(CONNECT_TIMEOUT, read=STREAM_TIMEOUT)
-                ) as response:
-                    if response.status_code != 200:
-                        error_text = await response.aread()
-                        logger.error(f"Deepseek API错误响应: {response.status_code}")
-                        if response.status_code >= 500 and retry_count < MAX_RETRIES:
-                            retry_count += 1
-                            await asyncio.sleep(1 * retry_count)  # 指数退避
-                            continue
-                        raise HTTPException(
-                            status_code=response.status_code,
-                            detail=f"Deepseek API错误: {error_text}"
-                        )
-                    
-                    # 使用缓冲区合并小数据包
-                    async for chunk in response.aiter_text():
-                        buffer += chunk
-                        if len(buffer) >= BUFFER_SIZE or '\n' in buffer:
-                            lines = buffer.split('\n')
-                            for line in lines[:-1]:  # 处理完整行
-                                if line.strip():
-                                    yield line + '\n'
-                            buffer = lines[-1]  # 保留不完整行
-                    
-                    # 发送缓冲区剩余内容
-                    if buffer:
-                        yield buffer
-                        buffer = ""
-                    
-                    return  # 成功完成
-                    
-            except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-                if retry_count < MAX_RETRIES:
-                    retry_count += 1
-                    await asyncio.sleep(1 * retry_count)
-                    continue
-                logger.error(f"Deepseek API连接超时: {str(e)}")
-                raise HTTPException(
-                    status_code=504,
-                    detail=f"Deepseek API连接超时: {str(e)}"
-                )
-            except Exception as e:
-                logger.error(f"处理Deepseek API流式响应时发生错误: {str(e)}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"调用Deepseek API时发生错误: {str(e)}"
-                )
-        
-        raise HTTPException(
-            status_code=503,
-            detail="达到最大重试次数，请稍后再试"
-        )
+    
+    def get_api_endpoint(self, api_base: str) -> str:
+        """获取DeepSeek API端点"""
+        return f"{api_base}/chat/completions"
+
+# 创建全局实例
+_deepseek_service = DeepSeekService()
+
+# 兼容性函数，保持原有接口
+async def get_deepseek_response(message: str, conversation_history: List[Dict] = None) -> str:
+    """调用Deepseek API获取响应（非流式）"""
+    return await _deepseek_service.get_non_stream_response(message, conversation_history)
+
+async def get_deepseek_stream_response(message: str, conversation_history: List[Dict] = None):
+    """调用Deepseek API获取流式响应"""
+    async for chunk in _deepseek_service.get_stream_response(message, conversation_history):
+        yield chunk

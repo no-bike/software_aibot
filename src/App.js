@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { 
   Box, 
   Container, 
@@ -52,7 +52,8 @@ import {
   Share as ShareIcon,
   Visibility as VisibilityIcon,
   ContentCopy as ContentCopyIcon,
-  LightbulbOutlined as LightbulbIcon
+  LightbulbOutlined as LightbulbIcon,
+  KeyboardArrowDown as KeyboardArrowDownIcon
 } from '@mui/icons-material';
 import HistoryIcon from '@mui/icons-material/History';
 import SearchIcon from '@mui/icons-material/Search';
@@ -432,62 +433,149 @@ const MainApp = () => {
           });
         }
       } 
-      // 多个模型时保持原样
+      // 多个模型时使用并发流式响应
       else {
-        // 调用API发送消息（非流式）
-        const response = await sendMessageToAPI(currentMessage, selectedModels, conversationId);
-        console.log('收到API响应:', response);
-
-        if (!response || !response.responses) {
-          throw new Error('服务器返回的响应格式不正确');
-        }
-        
-        let aiMessages;
-        if (mergeResponses && response.responses.length > 1) {
-          try {
-            // 调用融合API
-            const fusionResult = await fusionResponses(response.responses, conversationId);
-            aiMessages = [{
-              role: 'assistant',
-              content: fusionResult.fusedContent,
-              model: 'fusion',
-              timestamp: new Date().toISOString()
-            }];
-          } catch (fusionError) {
-            console.error('融合回答失败:', fusionError);
-            // 如果融合失败，回退到分别显示每个模型的回答
-            aiMessages = response.responses.map(response => ({
-              role: 'assistant',
-              content: response.content,
-              model: response.modelId,
-              timestamp: new Date().toISOString()
-            }));
-          }
-        } else {
-          // 分别显示每个模型的回答
-          aiMessages = response.responses.map(response => ({
-            role: 'assistant',
-            content: response.content,
-            model: response.modelId,
-            timestamp: new Date().toISOString()
-          }));
-        }
-
-        console.log('处理后的AI消息:', aiMessages);
-
-        // 更新对话内容
-        setConversations(prevConversations => {
-          return prevConversations.map(conv => {
-            if (conv.id === conversationId) {
-              const updatedMessages = [...conv.messages, ...aiMessages];
-              return {
-                ...conv,
-                messages: updatedMessages
+        // 调用API发送消息（多模型流式）
+        const response = await sendMessageToAPI(
+          currentMessage, 
+          selectedModels, 
+          conversationId,
+          null, // 单模型流式回调
+          (streamData) => { // 多模型流式回调
+            console.log('多模型流式数据:', streamData);
+            
+            if (streamData.type === 'start') {
+              console.log(`🚀 开始并发调用 ${streamData.models.length} 个模型`);
+              
+            } else if (streamData.type === 'model_start') {
+              console.log(`🤔 模型 ${streamData.modelId} 开始思考`);
+              
+              // 为新开始的模型创建占位消息
+              const tempMessage = {
+                role: 'assistant',
+                content: '思考中...',
+                model: streamData.modelId,
+                timestamp: new Date().toISOString(),
+                isStreaming: true
               };
+              
+              setConversations(prevConversations => {
+                return prevConversations.map(conv => {
+                  if (conv.id === conversationId) {
+                    return {
+                      ...conv,
+                      messages: [...conv.messages, tempMessage]
+                    };
+                  }
+                  return conv;
+                });
+              });
+              
+            } else if (streamData.type === 'model_chunk') {
+              // 实时更新流式内容
+              setConversations(prevConversations => {
+                return prevConversations.map(conv => {
+                  if (conv.id === conversationId) {
+                    const messages = [...conv.messages];
+                    
+                    // 找到对应模型的流式消息并更新
+                    const messageIndex = messages.findIndex(msg => 
+                      msg.model === streamData.modelId && msg.isStreaming
+                    );
+                    
+                    if (messageIndex !== -1) {
+                      messages[messageIndex] = {
+                        ...messages[messageIndex],
+                        content: streamData.accumulated, // 使用累积内容
+                        isStreaming: true
+                      };
+                    }
+                    
+                    return {
+                      ...conv,
+                      messages: messages
+                    };
+                  }
+                  return conv;
+                });
+              });
+              
+            } else if (streamData.type === 'model_complete') {
+              console.log(`✅ 模型 ${streamData.modelId} 完成响应`);
+              
+              // 标记模型响应完成
+              setConversations(prevConversations => {
+                return prevConversations.map(conv => {
+                  if (conv.id === conversationId) {
+                    const messages = [...conv.messages];
+                    
+                    // 找到对应模型的消息并标记完成
+                    const messageIndex = messages.findIndex(msg => 
+                      msg.model === streamData.modelId && msg.isStreaming
+                    );
+                    
+                    if (messageIndex !== -1) {
+                      messages[messageIndex] = {
+                        ...messages[messageIndex],
+                        content: streamData.content,
+                        isStreaming: false,
+                        status: streamData.status
+                      };
+                    }
+                    
+                    return {
+                      ...conv,
+                      messages: messages
+                    };
+                  }
+                  return conv;
+                });
+              });
+              
+            } else if (streamData.type === 'all_complete') {
+              console.log('🎉 所有模型响应完成');
+              
+              // 如果启用了融合响应且有多个成功的响应
+              if (mergeResponses && streamData.responses && streamData.responses.length > 1) {
+                const successfulResponses = streamData.responses.filter(resp => resp.status === 'success');
+                
+                if (successfulResponses.length > 1) {
+                  // 异步进行融合处理
+                  setTimeout(async () => {
+                    try {
+                      const fusionResult = await fusionResponses(successfulResponses, conversationId);
+                      
+                      // 添加融合结果
+                      const fusionMessage = {
+                        role: 'assistant',
+                        content: fusionResult.fusedContent,
+                        model: 'fusion',
+                        timestamp: new Date().toISOString()
+                      };
+                      
+                      setConversations(prevConversations => {
+                        return prevConversations.map(conv => {
+                          if (conv.id === conversationId) {
+                            return {
+                              ...conv,
+                              messages: [...conv.messages, fusionMessage]
+                            };
+                          }
+                          return conv;
+                        });
+                      });
+                      
+                    } catch (fusionError) {
+                      console.error('融合回答失败:', fusionError);
+                    }
+                  }, 100);
+                }
+              }
             }
-            return conv;
-          });
-        });
+          }
+        );
+
+        console.log('多模型流式响应完成:', response);
       }
     } catch (error) {
       console.error('发送消息时出错:', error);
@@ -583,16 +671,104 @@ const MainApp = () => {
     return conversations.find(conv => conv.id === currentConversationId) || { messages: [] };
   };
 
-  // 当消息变化时自动滚动到底部
-  useEffect(() => {
-    const container = document.querySelector('.messages-container');
+  // 滚动状态管理
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [userIsScrolling, setUserIsScrolling] = useState(false);
+  const messagesContainerRef = useRef(null);
+  const scrollTimeoutRef = useRef(null);
+
+  // 检查是否在底部附近
+  const checkIfNearBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      const threshold = 50; // 减小阈值，更精确地检测底部
+      const scrollTop = container.scrollTop;
+      const scrollHeight = container.scrollHeight;
+      const clientHeight = container.clientHeight;
+      const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+      
+      const isNear = distanceFromBottom <= threshold;
+      
+      // 如果用户主动向上滚动了较大距离，立即停止自动滚动
+      if (distanceFromBottom > 200) {
+        setIsNearBottom(false);
+        setShowScrollToBottom(true);
+      } else {
+        setIsNearBottom(isNear);
+        setShowScrollToBottom(!isNear);
+      }
+      
+      
+    }
+  }, []);
+
+  // 滚动到底部的函数
+  const scrollToBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
     if (container) {
       container.scrollTo({
         top: container.scrollHeight,
         behavior: 'smooth'
       });
+      setIsNearBottom(true);
+      setShowScrollToBottom(false);
     }
-  }, [currentConversationId, conversations]);
+  }, []);
+
+  // 智能自动滚动：只有在用户接近底部且没有主动滚动时才自动滚动
+  useEffect(() => {
+    if (isNearBottom && !userIsScrolling) {
+      // 使用 setTimeout 确保 DOM 更新完成后再滚动
+      const timer = setTimeout(() => {
+        scrollToBottom();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [currentConversationId, conversations, isNearBottom, userIsScrolling, scrollToBottom]);
+
+  // 监听流式消息更新时的滚动
+  useEffect(() => {
+    if (isNearBottom && !userIsScrolling && streamingContent) {
+      // 流式消息更新时，如果用户在底部附近且没有主动滚动，则保持滚动到底部
+      const timer = setTimeout(() => {
+        scrollToBottom();
+      }, 10); // 更短的延迟，确保流式更新时的平滑滚动
+      return () => clearTimeout(timer);
+    }
+  }, [streamingContent, isNearBottom, userIsScrolling, scrollToBottom]);
+
+  // 监听滚动事件
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      const handleScroll = () => {
+        // 标记用户正在滚动
+        setUserIsScrolling(true);
+        
+        // 清除之前的超时
+        if (scrollTimeoutRef.current) {
+          clearTimeout(scrollTimeoutRef.current);
+        }
+        
+        // 检查滚动位置
+        checkIfNearBottom();
+        
+        // 2秒后重置用户滚动状态
+        scrollTimeoutRef.current = setTimeout(() => {
+          setUserIsScrolling(false);
+        }, 2000);
+      };
+      
+      container.addEventListener('scroll', handleScroll);
+      return () => {
+        container.removeEventListener('scroll', handleScroll);
+        if (scrollTimeoutRef.current) {
+          clearTimeout(scrollTimeoutRef.current);
+        }
+      };
+    }
+  }, [checkIfNearBottom]);
 
   const handleModelsUpdate = (updatedModels) => {
     setModels(updatedModels);
@@ -1188,7 +1364,16 @@ const MainApp = () => {
                       </Box>
                     )}
 
-                    <Box className="messages-container" sx={{ flex: 1, overflow: 'auto', mb: 2 }}>
+                    <Box 
+                      ref={messagesContainerRef}
+                      className="messages-container" 
+                      sx={{ 
+                        flex: 1, 
+                        overflow: 'auto', 
+                        mb: 2,
+                        position: 'relative'
+                      }}
+                    >
                       {getCurrentConversation().messages && getCurrentConversation().messages.length > 0 ? (
                         getCurrentConversation().messages.map((msg, index) => {
                           // 安全检查：确保消息对象存在且有必要的属性
@@ -1387,6 +1572,27 @@ const MainApp = () => {
                   
                   {/* 显示加载指示器 */}
                   {isLoadingResponse && <TypingIndicator />}
+                  
+                  {/* 回到底部按钮 */}
+                  {showScrollToBottom && (
+                    <Fab
+                      size="small"
+                      color="primary"
+                      onClick={scrollToBottom}
+                      sx={{
+                        position: 'absolute',
+                        bottom: 16,
+                        right: 16,
+                        zIndex: 1000,
+                        opacity: 0.8,
+                        '&:hover': {
+                          opacity: 1
+                        }
+                      }}
+                                          >
+                        <KeyboardArrowDownIcon />
+                      </Fab>
+                  )}
                 </Box>
 
                     <Box sx={{ display: 'flex', gap: 1, position: 'relative' }}>

@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 import json
@@ -60,6 +60,14 @@ class MongoDBService:
             await self.db.shares.create_index("user_id")
             await self.db.shares.create_index("conversation_id")
             await self.db.shares.create_index("created_at")
+            
+            # 为用户模型集合创建索引
+            await self.db.user_models.create_index([("user_id", 1), ("model_id", 1)], unique=True)  # 复合唯一索引
+            await self.db.user_models.create_index("user_id")
+            await self.db.user_models.create_index([("user_id", 1), ("created_at", -1)])
+            await self.db.user_models.create_index("created_at")
+            await self.db.user_models.create_index("updated_at")
+            await self.db.user_models.create_index("is_active")
             
             logger.info("Database indexes created successfully")
         except Exception as e:
@@ -582,6 +590,387 @@ class MongoDBService:
         except Exception as e:
             logger.error(f"获取用户信息失败: {str(e)}")
             return None
+
+    # ==================== 模型配置管理方法 ====================
+    
+    async def save_user_model(self, model_config: Dict[str, Any], user_id: str = "default_user") -> bool:
+        """
+        保存用户自定义模型配置
+        
+        Args:
+            model_config: 模型配置字典
+            user_id: 用户ID
+            
+        Returns:
+            bool: 是否保存成功
+        """
+        try:
+            model_id = model_config.get("id")
+            if not model_id:
+                logger.error("模型配置缺少model_id")
+                return False
+            
+            # 准备模型文档
+            model_doc = {
+                "model_id": model_id,
+                "user_id": user_id,
+                "name": model_config.get("name", ""),
+                "api_key": model_config.get("apiKey", ""),
+                "api_base": model_config.get("apiBase", ""),
+                "model_type": model_config.get("type", "custom"),
+                "description": model_config.get("description", ""),
+                "max_tokens": model_config.get("maxTokens", 4000),
+                "temperature": model_config.get("temperature", 0.7),
+                "stream_support": model_config.get("streamSupport", True),
+                "is_active": model_config.get("isActive", True),
+                "created_at": get_beijing_time().isoformat(),
+                "updated_at": get_beijing_time().isoformat(),
+                "config_version": "1.0"
+            }
+            
+            # 使用upsert更新或插入模型配置
+            result = await self.db.user_models.update_one(
+                {"model_id": model_id, "user_id": user_id},
+                {"$set": model_doc},
+                upsert=True
+            )
+            
+            logger.info(f"用户模型配置已保存: {model_id} for user: {user_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"保存用户模型配置失败: {str(e)}")
+            return False
+    
+    async def get_user_model(self, model_id: str, user_id: str = "default_user") -> Optional[Dict[str, Any]]:
+        """
+        获取指定的用户模型配置
+        
+        Args:
+            model_id: 模型ID
+            user_id: 用户ID
+            
+        Returns:
+            Optional[Dict]: 模型配置字典或None
+        """
+        try:
+            model_doc = await self.db.user_models.find_one(
+                {"model_id": model_id, "user_id": user_id, "is_active": True}
+            )
+            
+            if not model_doc:
+                return None
+            
+            # 转换为前端格式
+            return {
+                "id": model_doc["model_id"],
+                "name": model_doc.get("name", ""),
+                "apiKey": model_doc.get("api_key", ""),
+                "apiBase": model_doc.get("api_base", ""),
+                "type": model_doc.get("model_type", "custom"),
+                "description": model_doc.get("description", ""),
+                "maxTokens": model_doc.get("max_tokens", 4000),
+                "temperature": model_doc.get("temperature", 0.7),
+                "streamSupport": model_doc.get("stream_support", True),
+                "isActive": model_doc.get("is_active", True),
+                "createdAt": model_doc.get("created_at"),
+                "updatedAt": model_doc.get("updated_at")
+            }
+            
+        except Exception as e:
+            logger.error(f"获取用户模型配置失败: {str(e)}")
+            return None
+    
+    async def get_all_user_models(self, user_id: str = "default_user") -> List[Dict[str, Any]]:
+        """
+        获取用户的所有模型配置
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            List[Dict]: 模型配置列表
+        """
+        try:
+            models = []
+            cursor = self.db.user_models.find(
+                {"user_id": user_id, "is_active": True}
+            ).sort("created_at", -1)
+            
+            async for model_doc in cursor:
+                models.append({
+                    "id": model_doc["model_id"],
+                    "name": model_doc.get("name", ""),
+                    "apiKey": model_doc.get("api_key", ""),
+                    "apiBase": model_doc.get("api_base", ""),
+                    "type": model_doc.get("model_type", "custom"),
+                    "description": model_doc.get("description", ""),
+                    "maxTokens": model_doc.get("max_tokens", 4000),
+                    "temperature": model_doc.get("temperature", 0.7),
+                    "streamSupport": model_doc.get("stream_support", True),
+                    "isActive": model_doc.get("is_active", True),
+                    "createdAt": model_doc.get("created_at"),
+                    "updatedAt": model_doc.get("updated_at")
+                })
+            
+            return models
+            
+        except Exception as e:
+            logger.error(f"获取用户模型配置列表失败: {str(e)}")
+            return []
+    
+    async def update_user_model(self, model_id: str, updates: Dict[str, Any], user_id: str = "default_user") -> bool:
+        """
+        更新用户模型配置
+        
+        Args:
+            model_id: 模型ID
+            updates: 更新字段字典
+            user_id: 用户ID
+            
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            # 准备更新数据
+            update_doc = {}
+            field_mapping = {
+                "name": "name",
+                "apiKey": "api_key",
+                "apiBase": "api_base",
+                "type": "model_type",
+                "description": "description",
+                "maxTokens": "max_tokens",
+                "temperature": "temperature",
+                "streamSupport": "stream_support",
+                "isActive": "is_active"
+            }
+            
+            for front_key, db_key in field_mapping.items():
+                if front_key in updates:
+                    update_doc[db_key] = updates[front_key]
+            
+            update_doc["updated_at"] = get_beijing_time().isoformat()
+            
+            result = await self.db.user_models.update_one(
+                {"model_id": model_id, "user_id": user_id},
+                {"$set": update_doc}
+            )
+            
+            if result.matched_count > 0:
+                logger.info(f"用户模型配置已更新: {model_id} for user: {user_id}")
+                return True
+            else:
+                logger.warning(f"未找到要更新的模型配置: {model_id}, {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"更新用户模型配置失败: {str(e)}")
+            return False
+    
+    async def delete_user_model(self, model_id: str, user_id: str = "default_user") -> bool:
+        """
+        删除用户模型配置（软删除）
+        
+        Args:
+            model_id: 模型ID
+            user_id: 用户ID
+            
+        Returns:
+            bool: 是否删除成功
+        """
+        try:
+            result = await self.db.user_models.update_one(
+                {"model_id": model_id, "user_id": user_id},
+                {
+                    "$set": {
+                        "is_active": False,
+                        "updated_at": get_beijing_time().isoformat()
+                    }
+                }
+            )
+            
+            if result.matched_count > 0:
+                logger.info(f"用户模型配置已删除: {model_id} for user: {user_id}")
+                return True
+            else:
+                logger.warning(f"未找到要删除的模型配置: {model_id}, {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"删除用户模型配置失败: {str(e)}")
+            return False
+    
+    async def restore_models_to_environment(self, user_id: str = "default_user") -> Dict[str, str]:
+        """
+        将用户的模型配置恢复到环境变量
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            Dict[str, str]: 设置的环境变量字典
+        """
+        try:
+            models = await self.get_all_user_models(user_id)
+            env_vars = {}
+            
+            for model in models:
+                model_id = model["id"].upper()
+                api_key = model.get("apiKey", "")
+                api_base = model.get("apiBase", "")
+                
+                if api_key:
+                    key_var = f"{model_id}_API_KEY"
+                    os.environ[key_var] = api_key
+                    env_vars[key_var] = api_key
+                
+                if api_base:
+                    base_var = f"{model_id}_API_BASE"
+                    os.environ[base_var] = api_base
+                    env_vars[base_var] = api_base
+            
+            logger.info(f"已恢复 {len(env_vars)} 个环境变量 for user: {user_id}")
+            return env_vars
+            
+        except Exception as e:
+            logger.error(f"恢复环境变量失败: {str(e)}")
+            return {}
+    
+    async def get_model_statistics(self, user_id: str = "default_user") -> Dict[str, Any]:
+        """
+        获取用户模型统计信息
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            Dict[str, Any]: 统计信息
+        """
+        try:
+            # 活跃模型数量
+            active_count = await self.db.user_models.count_documents(
+                {"user_id": user_id, "is_active": True}
+            )
+            
+            # 总模型数量（包括已删除）
+            total_count = await self.db.user_models.count_documents(
+                {"user_id": user_id}
+            )
+            
+            # 按类型统计
+            pipeline = [
+                {"$match": {"user_id": user_id, "is_active": True}},
+                {"$group": {"_id": "$model_type", "count": {"$sum": 1}}}
+            ]
+            
+            type_stats = {}
+            async for doc in self.db.user_models.aggregate(pipeline):
+                type_stats[doc["_id"]] = doc["count"]
+            
+            return {
+                "user_id": user_id,
+                "active_models": active_count,
+                "total_models": total_count,
+                "by_type": type_stats,
+                "generated_at": get_beijing_time().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"获取模型统计信息失败: {str(e)}")
+            return {
+                "user_id": user_id,
+                "active_models": 0,
+                "total_models": 0,
+                "by_type": {},
+                "generated_at": get_beijing_time().isoformat()
+            }
+    
+    async def export_user_models(self, user_id: str = "default_user") -> Dict[str, Any]:
+        """
+        导出用户的所有模型配置
+        
+        Args:
+            user_id: 用户ID
+            
+        Returns:
+            Dict[str, Any]: 导出的配置数据
+        """
+        try:
+            models = await self.get_all_user_models(user_id)
+            
+            export_data = {
+                "export_version": "1.0",
+                "user_id": user_id,
+                "exported_at": get_beijing_time().isoformat(),
+                "model_count": len(models),
+                "models": models
+            }
+            
+            logger.info(f"已导出 {len(models)} 个模型配置 for user: {user_id}")
+            return export_data
+            
+        except Exception as e:
+            logger.error(f"导出模型配置失败: {str(e)}")
+            return {
+                "export_version": "1.0",
+                "user_id": user_id,
+                "exported_at": get_beijing_time().isoformat(),
+                "model_count": 0,
+                "models": [],
+                "error": str(e)
+            }
+    
+    async def import_user_models(self, import_data: Dict[str, Any], user_id: str = "default_user") -> Dict[str, Any]:
+        """
+        导入用户模型配置
+        
+        Args:
+            import_data: 导入的配置数据
+            user_id: 用户ID
+            
+        Returns:
+            Dict[str, Any]: 导入结果
+        """
+        try:
+            models = import_data.get("models", [])
+            success_count = 0
+            failed_count = 0
+            errors = []
+            
+            for model in models:
+                try:
+                    # 为导入的模型添加用户ID
+                    model["user_id"] = user_id
+                    success = await self.save_user_model(model, user_id)
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                        errors.append(f"保存模型失败: {model.get('id', 'unknown')}")
+                except Exception as e:
+                    failed_count += 1
+                    errors.append(f"处理模型失败: {model.get('id', 'unknown')} - {str(e)}")
+            
+            result = {
+                "success": True,
+                "imported_at": get_beijing_time().isoformat(),
+                "total_models": len(models),
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "errors": errors
+            }
+            
+            logger.info(f"模型配置导入完成: 成功 {success_count}, 失败 {failed_count} for user: {user_id}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"导入模型配置失败: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "imported_at": get_beijing_time().isoformat()
+            }
 
 # 全局 MongoDB 服务实例
 mongodb_service = MongoDBService()
