@@ -264,8 +264,43 @@ export const deleteModel = async (modelId) => {
 };
 
 // 融合多个模型的回答
-export const fusionResponses = async (responses, conversationId) => {
+export const fusionResponses = async (responses, conversationId, userQuery = "请根据多个AI助手的回答，提供最优的综合答案。") => {
   try {
+    console.log('🚀 开始调用融合API...');
+    console.log('📊 输入参数:', { responses: responses.length, conversationId, userQuery });
+    
+    // 优先尝试高级融合API (LLM-Blender)
+    try {
+      console.log('🎯 尝试调用高级融合API...');
+      const advancedResponse = await fetch(`${API_BASE_URL}/fusion/advanced`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: userQuery,
+          responses,
+          conversationId,
+          fusionMethod: "rank_and_fuse",
+          topK: Math.min(3, responses.length)
+        }),
+        credentials: 'include'
+      });
+      
+      if (advancedResponse.ok) {
+        const result = await advancedResponse.json();
+        console.log('✅ 高级融合API调用成功:', result);
+        return result;
+      } else {
+        const errorText = await advancedResponse.text();
+        console.warn('⚠️ 高级融合API失败，尝试传统融合:', errorText);
+      }
+    } catch (advancedError) {
+      console.warn('⚠️ 高级融合API异常，尝试传统融合:', advancedError);
+    }
+    
+    // 降级到传统融合API
+    console.log('🔄 调用传统融合API...');
     const response = await fetch(`${API_BASE_URL}/fusion`, {
       method: 'POST',
       headers: {
@@ -279,12 +314,17 @@ export const fusionResponses = async (responses, conversationId) => {
     });
     
     if (!response.ok) {
-      throw new Error('Failed to fusion responses');
+      const errorText = await response.text();
+      console.error('❌ 传统融合API也失败:', errorText);
+      throw new Error(`融合API调用失败: ${response.status} - ${errorText}`);
     }
     
-    return await response.json();
+    const result = await response.json();
+    console.log('✅ 传统融合API调用成功:', result);
+    return result;
+    
   } catch (error) {
-    console.error('Error fusion responses:', error);
+    console.error('❌ 融合回答完全失败:', error);
     throw error;
   }
 };

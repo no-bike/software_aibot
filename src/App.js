@@ -534,23 +534,31 @@ const MainApp = () => {
               
             } else if (streamData.type === 'all_complete') {
               console.log('🎉 所有模型响应完成');
+              console.log('📋 收到的响应数据:', streamData.responses);
               
               // 如果启用了融合响应且有多个成功的响应
               if (mergeResponses && streamData.responses && streamData.responses.length > 1) {
+                console.log('🔄 融合回答已启用，检查响应数据...');
                 const successfulResponses = streamData.responses.filter(resp => resp.status === 'success');
+                console.log(`✅ 成功响应数量: ${successfulResponses.length}/${streamData.responses.length}`);
                 
                 if (successfulResponses.length > 1) {
+                  console.log('🚀 满足融合条件，开始融合处理...');
                   // 异步进行融合处理
                   setTimeout(async () => {
                     try {
-                      const fusionResult = await fusionResponses(successfulResponses, conversationId);
+                      console.log('🎯 调用融合API，传递用户问题:', newMessage);
+                      const fusionResult = await fusionResponses(successfulResponses, conversationId, newMessage);
+                      console.log('🎉 融合处理完成:', fusionResult);
                       
                       // 添加融合结果
                       const fusionMessage = {
                         role: 'assistant',
                         content: fusionResult.fusedContent,
-                        model: 'fusion',
-                        timestamp: new Date().toISOString()
+                        model: fusionResult.fusionMethod === 'rank_and_fuse' ? 'llm_blender' : 'fusion',
+                        timestamp: new Date().toISOString(),
+                        fusion_method: fusionResult.fusionMethod,
+                        models_used: fusionResult.modelsUsed || []
                       };
                       
                       setConversations(prevConversations => {
@@ -566,10 +574,35 @@ const MainApp = () => {
                       });
                       
                     } catch (fusionError) {
-                      console.error('融合回答失败:', fusionError);
+                      console.error('❌ 融合回答失败:', fusionError);
+                      // 添加错误提示消息
+                      const errorMessage = {
+                        role: 'assistant',
+                        content: `融合回答失败: ${fusionError.message || '未知错误'}`,
+                        model: 'fusion_error',
+                        timestamp: new Date().toISOString()
+                      };
+                      
+                      setConversations(prevConversations => {
+                        return prevConversations.map(conv => {
+                          if (conv.id === conversationId) {
+                            return {
+                              ...conv,
+                              messages: [...conv.messages, errorMessage]
+                            };
+                          }
+                          return conv;
+                        });
+                      });
                     }
                   }, 100);
+                } else {
+                  console.log('⚠️ 成功响应不足，跳过融合 (需要至少2个成功响应)');
                 }
+              } else {
+                console.log('⚠️ 融合回答未启用或响应数据不足');
+                console.log('📊 融合回答状态:', mergeResponses);
+                console.log('📊 响应数据:', streamData.responses?.length || 0);
               }
             }
           }

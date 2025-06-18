@@ -915,6 +915,7 @@ async def chat(request: MessageRequest, req: Request):
                 # 实时处理队列中的数据
                 completed_models = 0
                 total_models = len(request.modelIds)
+                responses = {}  # 收集所有模型的响应
                 
                 try:
                     while completed_models < total_models:
@@ -927,8 +928,19 @@ async def chat(request: MessageRequest, req: Request):
                             
                             # 检查是否有模型完成
                             if stream_data.get("type") == "model_complete":
+                                model_id = stream_data.get('modelId')
+                                model_content = stream_data.get('content', '')
+                                model_status = stream_data.get('status', 'unknown')
+                                
+                                # 收集模型响应
+                                responses[model_id] = {
+                                    "modelId": model_id,
+                                    "content": model_content,
+                                    "status": model_status
+                                }
+                                
                                 completed_models += 1
-                                logger.info(f"模型完成: {stream_data.get('modelId')}, 进度: {completed_models}/{total_models}")
+                                logger.info(f"模型完成: {model_id}, 进度: {completed_models}/{total_models}, 状态: {model_status}")
                                 
                         except asyncio.TimeoutError:
                             logger.warning(f"等待模型响应超时，已完成: {completed_models}/{total_models}")
@@ -988,12 +1000,17 @@ async def chat(request: MessageRequest, req: Request):
                 except Exception as e:
                     logger.error(f"等待任务完成时发生错误: {str(e)}")
                 
-                # 发送完成信号
+                # 收集所有模型的响应，转换为列表格式
+                model_responses = list(responses.values())
+                logger.info(f"准备发送 all_complete 事件，收集到 {len(model_responses)} 个响应")
+                
+                # 发送完成信号，包含所有响应
                 end_data = {
                     "type": "all_complete",
-                    "message": f"所有 {total_models} 个模型已完成响应"
+                    "message": f"所有 {total_models} 个模型已完成响应",
+                    "responses": model_responses
                 }
-                yield f"data: {json.dumps(end_data)}\n\n"
+                yield f"data: {json.dumps(end_data, ensure_ascii=False)}\n\n"
                 yield f"data: [DONE]\n\n"
             
             return StreamingResponse(
